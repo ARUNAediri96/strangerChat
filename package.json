@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:api": "node server/mysql-api.js",
+    "dev:api": "node server/supabase-api.js",
     "dev:all": "concurrently \"npm run dev:api\" \"npm run dev\"",
-    "start": "node server/mysql-api.js",
+    "start": "node server/supabase-api.js",
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
@@ -15,8 +15,9 @@
   },
   "dependencies": {
     "concurrently": "^9.2.1",
+    "dotenv": "^16.4.7",
     "lucide-react": "^0.344.0",
-    "mysql2": "^3.15.3",
+    "pg": "^8.13.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

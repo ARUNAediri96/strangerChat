@@ -1,12 +1,28 @@
+import "dotenv/config";
 import http from "node:http";
 import { randomUUID } from "node:crypto";
-import mysql from "mysql2/promise";
+import pg from "pg";
+
+const { Pool } = pg;
 
 const port = Number(process.env.PORT || process.env.API_PORT || 3001);
 const allowedOrigins = (process.env.CORS_ORIGIN || "http://localhost:5173")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
+
+const connectionString = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL;
+
+const pool = new Pool({
+  connectionString,
+  host: connectionString ? undefined : process.env.PGHOST || "localhost",
+  port: connectionString ? undefined : Number(process.env.PGPORT || 5432),
+  user: connectionString ? undefined : process.env.PGUSER || "postgres",
+  password: connectionString ? undefined : process.env.PGPASSWORD || "",
+  database: connectionString ? undefined : process.env.PGDATABASE || "postgres",
+  ssl: process.env.PGSSLMODE === "disable" ? false : { rejectUnauthorized: false },
+  max: 10,
+});
 
 function corsOriginFor(req) {
   const requestOrigin = req.headers.origin;
@@ -17,26 +33,14 @@ function corsOriginFor(req) {
   return allowedOrigins[0] || requestOrigin;
 }
 
-const pool = mysql.createPool({
-  host: process.env.MYSQL_HOST || "localhost",
-  port: Number(process.env.MYSQL_PORT || 3306),
-  user: process.env.MYSQL_USER || "root",
-  password: process.env.MYSQL_PASSWORD || "",
-  database: process.env.MYSQL_DATABASE || "stranger_chat",
-  waitForConnections: true,
-  connectionLimit: 10,
-  namedPlaceholders: true,
-});
-
-function jsonResponse(res, status, body) {
+function jsonResponse(req, res, status, body) {
   res.writeHead(status, {
     "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": body.__corsOrigin || allowedOrigins[0] || "*",
+    "Access-Control-Allow-Origin": corsOriginFor(req),
     "Vary": "Origin",
     "Access-Control-Allow-Headers": "Content-Type",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
   });
-  delete body.__corsOrigin;
   res.end(JSON.stringify(body));
 }
 
@@ -51,6 +55,11 @@ function normalizeFilters(filters) {
   return Array.isArray(filters)
     ? filters.map((filter) => String(filter).trim()).filter(Boolean)
     : [];
+}
+
+function normalizeUuid(value) {
+  const id = String(value || "");
+  return id || null;
 }
 
 function parseJson(value, fallback) {
@@ -85,28 +94,27 @@ function matchedFiltersFor(filtersA, filtersB) {
   );
 }
 
-async function cleanupExpired() {
-  await pool.query("DELETE FROM active_chats WHERE expires_at < NOW()");
-  await pool.query("DELETE FROM waiting_pool WHERE created_at < NOW() - INTERVAL 30 MINUTE");
-  await pool.query("DELETE FROM chat_events WHERE created_at < NOW() - INTERVAL 2 HOUR");
+async function cleanupExpired(client = pool) {
+  await client.query("DELETE FROM active_chats WHERE expires_at < NOW()");
+  await client.query("DELETE FROM waiting_pool WHERE created_at < NOW() - INTERVAL '30 minutes'");
+  await client.query("DELETE FROM chat_events WHERE created_at < NOW() - INTERVAL '2 hours'");
 }
 
 async function joinPool(body) {
-  const sessionId = String(body.sessionId || "");
+  const sessionId = normalizeUuid(body.sessionId);
   const filters = normalizeFilters(body.filters);
   const publicKey = String(body.publicKey || "");
 
   if (!sessionId) return { status: 400, body: { error: "sessionId required" } };
 
-  await cleanupExpired();
-
-  const conn = await pool.getConnection();
+  const client = await pool.connect();
   try {
-    await conn.beginTransaction();
-    await conn.query("DELETE FROM waiting_pool WHERE session_id = ?", [sessionId]);
+    await client.query("BEGIN");
+    await cleanupExpired(client);
+    await client.query("DELETE FROM waiting_pool WHERE session_id = $1", [sessionId]);
 
-    const [poolRows] = await conn.query(
-      "SELECT * FROM waiting_pool WHERE session_id <> ? ORDER BY created_at ASC FOR UPDATE",
+    const { rows: poolRows } = await client.query(
+      "SELECT * FROM waiting_pool WHERE session_id <> $1 ORDER BY created_at ASC FOR UPDATE",
       [sessionId]
     );
 
@@ -114,7 +122,7 @@ async function joinPool(body) {
     let bestScore = -1;
 
     for (const candidate of poolRows) {
-      const candidateFilters = normalizeFilters(parseJson(candidate.filters, []));
+      const candidateFilters = normalizeFilters(candidate.filters);
       const score = calculateSimilarity(filters, candidateFilters);
       if (score > bestScore) {
         bestScore = score;
@@ -130,25 +138,24 @@ async function joinPool(body) {
         const chatId = randomUUID();
         const matchedFilters = matchedFiltersFor(filters, bestMatch.filters);
 
-        await conn.query("DELETE FROM waiting_pool WHERE session_id IN (?, ?)", [
-          sessionId,
-          bestMatch.session_id,
+        await client.query("DELETE FROM waiting_pool WHERE session_id = ANY($1::uuid[])", [
+          [sessionId, bestMatch.session_id],
         ]);
-        await conn.query(
+        await client.query(
           `INSERT INTO active_chats
             (id, user_a_session, user_b_session, user_a_public_key, user_b_public_key, matched_filters, expires_at)
-           VALUES (?, ?, ?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 2 HOUR))`,
+           VALUES ($1, $2, $3, $4, $5, $6, NOW() + INTERVAL '2 hours')`,
           [
             chatId,
             sessionId,
             bestMatch.session_id,
             publicKey,
             bestMatch.public_key || "",
-            JSON.stringify(matchedFilters),
+            matchedFilters,
           ]
         );
 
-        await conn.commit();
+        await client.query("COMMIT");
         return {
           status: 200,
           body: {
@@ -162,32 +169,32 @@ async function joinPool(body) {
       }
     }
 
-    await conn.query(
-      "INSERT INTO waiting_pool (session_id, filters, public_key) VALUES (?, ?, ?)",
-      [sessionId, JSON.stringify(filters), publicKey]
+    await client.query(
+      "INSERT INTO waiting_pool (session_id, filters, public_key) VALUES ($1, $2, $3)",
+      [sessionId, filters, publicKey]
     );
-    await conn.commit();
+    await client.query("COMMIT");
     return { status: 200, body: { matched: false, status: "waiting" } };
   } catch (error) {
-    await conn.rollback();
+    await client.query("ROLLBACK");
     throw error;
   } finally {
-    conn.release();
+    client.release();
   }
 }
 
 async function checkMatch(body) {
-  const sessionId = String(body.sessionId || "");
+  const sessionId = normalizeUuid(body.sessionId);
   if (!sessionId) return { status: 400, body: { error: "sessionId required" } };
 
   await cleanupExpired();
 
-  const [chatRows] = await pool.query(
+  const { rows: chatRows } = await pool.query(
     `SELECT * FROM active_chats
-     WHERE user_a_session = ? OR user_b_session = ?
+     WHERE user_a_session = $1 OR user_b_session = $1
      ORDER BY created_at DESC
      LIMIT 1`,
-    [sessionId, sessionId]
+    [sessionId]
   );
   const chat = chatRows[0];
 
@@ -199,14 +206,14 @@ async function checkMatch(body) {
         matched: true,
         chatId: chat.id,
         peerPublicKey: isUserA ? chat.user_b_public_key : chat.user_a_public_key,
-        matchedFilters: parseJson(chat.matched_filters, []),
+        matchedFilters: normalizeFilters(chat.matched_filters),
         isInitiator: isUserA,
       },
     };
   }
 
-  const [poolRows] = await pool.query(
-    "SELECT session_id FROM waiting_pool WHERE session_id = ? LIMIT 1",
+  const { rows: poolRows } = await pool.query(
+    "SELECT session_id FROM waiting_pool WHERE session_id = $1 LIMIT 1",
     [sessionId]
   );
 
@@ -219,21 +226,21 @@ async function checkMatch(body) {
 }
 
 async function leaveChat(body) {
-  const sessionId = String(body.sessionId || "");
-  const chatId = body.chatId ? String(body.chatId) : "";
+  const sessionId = normalizeUuid(body.sessionId);
+  const chatId = body.chatId ? normalizeUuid(body.chatId) : null;
   if (!sessionId) return { status: 400, body: { error: "sessionId required" } };
 
-  await pool.query("DELETE FROM waiting_pool WHERE session_id = ?", [sessionId]);
+  await pool.query("DELETE FROM waiting_pool WHERE session_id = $1", [sessionId]);
   if (chatId) {
-    await pool.query("DELETE FROM active_chats WHERE id = ?", [chatId]);
+    await pool.query("DELETE FROM active_chats WHERE id = $1", [chatId]);
   }
 
   return { status: 200, body: { success: true } };
 }
 
 async function reportChat(body) {
-  const chatId = String(body.chatId || "");
-  const reporterSession = String(body.reporterSession || "");
+  const chatId = normalizeUuid(body.chatId);
+  const reporterSession = normalizeUuid(body.reporterSession);
   const reason = String(body.reason || "");
 
   if (!chatId || !reporterSession) {
@@ -241,7 +248,7 @@ async function reportChat(body) {
   }
 
   await pool.query(
-    "INSERT INTO chat_reports (chat_id, reporter_session, reason) VALUES (?, ?, ?)",
+    "INSERT INTO chat_reports (chat_id, reporter_session, reason) VALUES ($1, $2, $3)",
     [chatId, reporterSession, reason]
   );
 
@@ -249,8 +256,8 @@ async function reportChat(body) {
 }
 
 async function addEvent(body) {
-  const chatId = String(body.chatId || "");
-  const sessionId = String(body.sessionId || "");
+  const chatId = normalizeUuid(body.chatId);
+  const sessionId = normalizeUuid(body.sessionId);
   const event = String(body.event || "");
   const payload = body.payload && typeof body.payload === "object" ? body.payload : {};
 
@@ -259,7 +266,7 @@ async function addEvent(body) {
   }
 
   await pool.query(
-    "INSERT INTO chat_events (chat_id, session_id, event_name, payload) VALUES (?, ?, ?, ?)",
+    "INSERT INTO chat_events (chat_id, session_id, event_name, payload) VALUES ($1, $2, $3, $4)",
     [chatId, sessionId, event, JSON.stringify(payload)]
   );
 
@@ -267,14 +274,14 @@ async function addEvent(body) {
 }
 
 async function getEvents(url) {
-  const chatId = url.searchParams.get("chatId") || "";
+  const chatId = normalizeUuid(url.searchParams.get("chatId"));
   const since = Number(url.searchParams.get("since") || 0);
   if (!chatId) return { status: 400, body: { error: "chatId required" } };
 
-  const [rows] = await pool.query(
+  const { rows } = await pool.query(
     `SELECT id, session_id, event_name, payload
      FROM chat_events
-     WHERE chat_id = ? AND id > ?
+     WHERE chat_id = $1 AND id > $2
      ORDER BY id ASC
      LIMIT 100`,
     [chatId, since]
@@ -284,7 +291,7 @@ async function getEvents(url) {
     status: 200,
     body: {
       events: rows.map((row) => ({
-        id: row.id,
+        id: Number(row.id),
         sessionId: row.session_id,
         event: row.event_name,
         payload: parseJson(row.payload, {}),
@@ -302,10 +309,8 @@ const handlers = {
 };
 
 const server = http.createServer(async (req, res) => {
-  const withCors = (body) => ({ ...body, __corsOrigin: corsOriginFor(req) });
-
   if (req.method === "OPTIONS") {
-    jsonResponse(res, 204, withCors({}));
+    jsonResponse(req, res, 204, {});
     return;
   }
 
@@ -313,30 +318,30 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
 
     if (req.method === "GET" && url.pathname === "/health") {
-      jsonResponse(res, 200, withCors({ ok: true }));
+      jsonResponse(req, res, 200, { ok: true });
       return;
     }
 
     if (req.method === "GET" && url.pathname === "/api/chat/events") {
       const result = await getEvents(url);
-      jsonResponse(res, result.status, withCors(result.body));
+      jsonResponse(req, res, result.status, result.body);
       return;
     }
 
     const handler = handlers[url.pathname];
     if (req.method === "POST" && handler) {
       const result = await handler(await readJson(req));
-      jsonResponse(res, result.status, withCors(result.body));
+      jsonResponse(req, res, result.status, result.body);
       return;
     }
 
-    jsonResponse(res, 404, withCors({ error: "Not found" }));
+    jsonResponse(req, res, 404, { error: "Not found" });
   } catch (error) {
     console.error(error);
-    jsonResponse(res, 500, withCors({ error: "Internal server error" }));
+    jsonResponse(req, res, 500, { error: "Internal server error" });
   }
 });
 
 server.listen(port, () => {
-  console.log(`MySQL chat API listening on http://localhost:${port}`);
+  console.log(`Supabase chat API listening on http://localhost:${port}`);
 });

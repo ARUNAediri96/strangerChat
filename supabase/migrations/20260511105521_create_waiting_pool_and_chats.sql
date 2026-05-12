@@ -64,9 +64,20 @@ CREATE TABLE IF NOT EXISTS active_chats (
 -- Chat reports for abuse
 CREATE TABLE IF NOT EXISTS chat_reports (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  chat_id uuid NOT NULL REFERENCES active_chats(id) ON DELETE CASCADE,
+  chat_id uuid NOT NULL,
   reporter_session uuid NOT NULL,
   reason text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Ephemeral chat event queue used by the Node API for encrypted messages,
+-- typing indicators, and disconnect notifications.
+CREATE TABLE IF NOT EXISTS chat_events (
+  id bigserial PRIMARY KEY,
+  chat_id uuid NOT NULL,
+  session_id uuid NOT NULL,
+  event_name text NOT NULL,
+  payload jsonb NOT NULL DEFAULT '{}',
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -77,11 +88,14 @@ CREATE INDEX IF NOT EXISTS idx_active_chats_user_a ON active_chats(user_a_sessio
 CREATE INDEX IF NOT EXISTS idx_active_chats_user_b ON active_chats(user_b_session);
 CREATE INDEX IF NOT EXISTS idx_active_chats_expires ON active_chats(expires_at);
 CREATE INDEX IF NOT EXISTS idx_chat_reports_chat ON chat_reports(chat_id);
+CREATE INDEX IF NOT EXISTS idx_chat_events_chat_id_id ON chat_events(chat_id, id);
+CREATE INDEX IF NOT EXISTS idx_chat_events_created_at ON chat_events(created_at);
 
 -- Enable RLS
 ALTER TABLE waiting_pool ENABLE ROW LEVEL SECURITY;
 ALTER TABLE active_chats ENABLE ROW LEVEL SECURITY;
 ALTER TABLE chat_reports ENABLE ROW LEVEL SECURITY;
+ALTER TABLE chat_events ENABLE ROW LEVEL SECURITY;
 
 -- Waiting pool policies
 CREATE POLICY "Users can insert own waiting entry"
@@ -133,11 +147,24 @@ CREATE POLICY "Anyone can submit reports"
   TO anon, authenticated
   WITH CHECK (true);
 
+-- Event policies are intentionally permissive because events contain encrypted
+-- payloads and the production Node API normally talks to Postgres server-side.
+CREATE POLICY "Users can insert chat events"
+  ON chat_events FOR INSERT
+  TO anon, authenticated
+  WITH CHECK (true);
+
+CREATE POLICY "Users can read chat events"
+  ON chat_events FOR SELECT
+  TO anon, authenticated
+  USING (true);
+
 -- Auto-cleanup: delete expired chats periodically
 CREATE OR REPLACE FUNCTION cleanup_expired_chats()
 RETURNS void AS $$
 BEGIN
   DELETE FROM active_chats WHERE expires_at < now();
   DELETE FROM waiting_pool WHERE created_at < now() - interval '30 minutes';
+  DELETE FROM chat_events WHERE created_at < now() - interval '2 hours';
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
