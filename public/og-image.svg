@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">StrangerChat</title>
+  <desc id="desc">Anonymous encrypted chat with strangers.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07111d"/>
+      <stop offset="0.55" stop-color="#0b1725"/>
+      <stop offset="1" stop-color="#022c22"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#34d399"/>
+      <stop offset="1" stop-color="#14b8a6"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <circle cx="1020" cy="80" r="260" fill="#14b8a6" opacity="0.12"/>
+  <circle cx="140" cy="560" r="230" fill="#34d399" opacity="0.10"/>
+  <g transform="translate(90 90)">
+    <rect x="0" y="0" width="1020" height="450" rx="32" fill="#ffffff" opacity="0.035" stroke="#ffffff" stroke-opacity="0.10"/>
+    <g transform="translate(70 76)">
+      <rect x="0" y="0" width="96" height="96" rx="24" fill="url(#accent)" opacity="0.20" stroke="#34d399" stroke-opacity="0.35"/>
+      <path d="M48 18 76 30v21c0 23-15 43-28 49-13-6-28-26-28-49V30l28-12Z" fill="none" stroke="#34d399" stroke-width="7" stroke-linejoin="round"/>
+      <path d="M35 51h26M48 38v26" stroke="#99f6e4" stroke-width="7" stroke-linecap="round"/>
+    </g>
+    <text x="70" y="250" fill="#ffffff" font-family="Inter, Arial, sans-serif" font-size="78" font-weight="800">Stranger<tspan fill="#34d399">Chat</tspan></text>
+    <text x="74" y="322" fill="#cbd5e1" font-family="Inter, Arial, sans-serif" font-size="34" font-weight="500">Anonymous. Encrypted. Ephemeral.</text>
+    <text x="74" y="382" fill="#94a3b8" font-family="Inter, Arial, sans-serif" font-size="25">Start private conversations with strangers using optional interest filters.</text>
+  </g>
+</svg>
