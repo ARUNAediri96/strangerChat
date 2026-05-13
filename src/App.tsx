@@ -7,11 +7,16 @@ function App() {
     status,
     messages,
     matchedFilters,
+    chatId,
     peerTyping,
+    mode,
+    isInitiator,
+    videoSignals,
     startChat,
     cancelSearch,
     sendMessage,
     sendTyping,
+    sendVideoSignal,
     skipChat,
     leaveCurrentChat,
     reportAndLeave,
@@ -23,9 +28,14 @@ function App() {
         status={status}
         messages={messages}
         matchedFilters={matchedFilters}
+        chatId={chatId}
         peerTyping={peerTyping}
+        mode={mode}
+        isInitiator={isInitiator}
+        videoSignals={videoSignals}
         onSendMessage={sendMessage}
         onSendTyping={sendTyping}
+        onSendVideoSignal={sendVideoSignal}
         onSkip={skipChat}
         onLeave={leaveCurrentChat}
         onReport={reportAndLeave}

@@ -9,8 +9,10 @@ CREATE TABLE IF NOT EXISTS waiting_pool (
   session_id VARCHAR(64) NOT NULL UNIQUE,
   filters JSON NOT NULL,
   public_key TEXT NOT NULL,
+  mode ENUM('chat', 'video') NOT NULL DEFAULT 'chat',
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  INDEX idx_waiting_pool_created_at (created_at)
+  INDEX idx_waiting_pool_created_at (created_at),
+  INDEX idx_waiting_pool_mode_created (mode, created_at)
 );
 
 CREATE TABLE IF NOT EXISTS active_chats (
@@ -20,6 +22,7 @@ CREATE TABLE IF NOT EXISTS active_chats (
   user_a_public_key TEXT NOT NULL,
   user_b_public_key TEXT NOT NULL,
   matched_filters JSON NOT NULL,
+  mode ENUM('chat', 'video') NOT NULL DEFAULT 'chat',
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   expires_at TIMESTAMP NOT NULL,
   INDEX idx_active_chats_user_a (user_a_session),

@@ -6,8 +6,11 @@ import {
   leaveChat,
   reportChat,
   createChatChannel,
+  type ChatMode,
   type MatchResult,
 } from "./match-api";
+
+export type { ChatMode } from "./match-api";
 
 export type ChatStatus =
   | "idle"
@@ -23,12 +26,20 @@ export interface ChatMessage {
   timestamp: number;
 }
 
+export interface VideoSignal {
+  id: string;
+  payload: Record<string, unknown>;
+}
+
 export function useChat() {
   const [status, setStatus] = useState<ChatStatus>("idle");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [matchedFilters, setMatchedFilters] = useState<string[]>([]);
   const [chatId, setChatId] = useState<string | null>(null);
   const [peerTyping, setPeerTyping] = useState(false);
+  const [mode, setMode] = useState<ChatMode>("chat");
+  const [isInitiator, setIsInitiator] = useState(false);
+  const [videoSignals, setVideoSignals] = useState<VideoSignal[]>([]);
 
   const sessionIdRef = useRef(crypto.randomUUID());
   const keyPairRef = useRef<{ publicKey: string; privateKey: string } | null>(null);
@@ -38,6 +49,7 @@ export function useChat() {
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const statusRef = useRef<ChatStatus>("idle");
   const filtersRef = useRef<string[]>([]);
+  const modeRef = useRef<ChatMode>("chat");
   const chatIdRef = useRef<string | null>(null);
   const startSearchingRef = useRef<(() => Promise<void>) | null>(null);
 
@@ -114,6 +126,15 @@ export function useChat() {
         typingTimeoutRef.current = setTimeout(() => setPeerTyping(false), 2000);
       });
 
+      channel.on("broadcast", { event: "video-signal" }, (event) => {
+        const payload = event.payload;
+        if (!payload || payload.session_id === sessionIdRef.current) return;
+        setVideoSignals((prev) => [
+          ...prev,
+          { id: crypto.randomUUID(), payload },
+        ]);
+      });
+
       channel.on("broadcast", { event: "disconnect" }, (event) => {
         const payload = event.payload;
         if (!payload || payload.session_id === sessionIdRef.current) return;
@@ -122,6 +143,7 @@ export function useChat() {
         setChatId(null);
         chatIdRef.current = null;
         setMatchedFilters([]);
+        setVideoSignals([]);
         peerPublicKeyRef.current = null;
         // Auto-restart matching
         void startSearchingRef.current?.();
@@ -140,6 +162,8 @@ export function useChat() {
       chatIdRef.current = result.chatId;
       peerPublicKeyRef.current = result.peerPublicKey;
       setMatchedFilters(result.matchedFilters || []);
+      setIsInitiator(Boolean(result.isInitiator));
+      if (result.mode) setMode(result.mode);
       setStatus("matched");
 
       setupChannel(result.chatId);
@@ -154,6 +178,7 @@ export function useChat() {
     setChatId(null);
     chatIdRef.current = null;
     peerPublicKeyRef.current = null;
+    setVideoSignals([]);
 
     setStatus("generating-keys");
     const keyPair = await generateKeyPair();
@@ -165,9 +190,10 @@ export function useChat() {
 
     const sessionId = sessionIdRef.current;
     const filters = filtersRef.current;
+    const selectedMode = modeRef.current;
 
     try {
-      const result = await joinPool(sessionId, filters, keyPair.publicKey);
+      const result = await joinPool(sessionId, filters, keyPair.publicKey, selectedMode);
 
       if (result.matched && result.chatId && result.peerPublicKey) {
         applyMatch(result);
@@ -194,8 +220,10 @@ export function useChat() {
   startSearchingRef.current = startSearching;
 
   const startChat = useCallback(
-    (filters: string[]) => {
+    (filters: string[], selectedMode: ChatMode) => {
       filtersRef.current = filters;
+      modeRef.current = selectedMode;
+      setMode(selectedMode);
       // New session for each new chat start
       sessionIdRef.current = crypto.randomUUID();
       startSearching();
@@ -246,6 +274,15 @@ export function useChat() {
     });
   }, []);
 
+  const sendVideoSignal = useCallback((payload: Record<string, unknown>) => {
+    if (!channelRef.current) return;
+    channelRef.current.send({
+      type: "broadcast",
+      event: "video-signal",
+      payload: { ...payload, session_id: sessionIdRef.current },
+    });
+  }, []);
+
   const cancelSearch = useCallback(async () => {
     cleanup();
     await leaveChat(sessionIdRef.current);
@@ -253,6 +290,7 @@ export function useChat() {
     setChatId(null);
     chatIdRef.current = null;
     setMatchedFilters([]);
+    setVideoSignals([]);
     peerPublicKeyRef.current = null;
     setStatus("idle");
   }, [cleanup]);
@@ -282,6 +320,7 @@ export function useChat() {
     setChatId(null);
     chatIdRef.current = null;
     setMatchedFilters([]);
+    setVideoSignals([]);
     peerPublicKeyRef.current = null;
 
     startSearching();
@@ -311,6 +350,7 @@ export function useChat() {
     setChatId(null);
     chatIdRef.current = null;
     setMatchedFilters([]);
+    setVideoSignals([]);
     peerPublicKeyRef.current = null;
     setStatus("idle");
   }, [cleanup]);
@@ -340,11 +380,16 @@ export function useChat() {
     messages,
     matchedFilters,
     chatId,
+    sessionId: sessionIdRef.current,
     peerTyping,
+    mode,
+    isInitiator,
+    videoSignals,
     startChat,
     cancelSearch,
     sendMessage,
     sendTyping,
+    sendVideoSignal,
     skipChat,
     leaveCurrentChat,
     reportAndLeave,

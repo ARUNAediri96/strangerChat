@@ -1,13 +1,13 @@
 import { useState } from "react";
-import { Shield, Zap, Eye, X } from "lucide-react";
+import { MessageCircle, Shield, Video, Zap, Eye, X } from "lucide-react";
 import FilterInput from "../components/FilterInput";
 import SearchAnimation from "../components/SearchAnimation";
-import type { ChatStatus } from "../lib/use-chat";
+import type { ChatMode, ChatStatus } from "../lib/use-chat";
 
 interface HomePageProps {
   status: ChatStatus;
   matchedFilters: string[];
-  onStartChat: (filters: string[]) => void;
+  onStartChat: (filters: string[], mode: ChatMode) => void;
   onCancelSearch: () => void;
 }
 
@@ -17,6 +17,7 @@ export default function HomePage({
   onCancelSearch,
 }: HomePageProps) {
   const [filters, setFilters] = useState<string[]>([]);
+  const [mode, setMode] = useState<ChatMode>("chat");
 
   const isSearching = status === "searching" || status === "generating-keys";
 
@@ -85,11 +86,38 @@ export default function HomePage({
             <>
               <div className="mb-5">
                 <h2 className="text-white text-lg font-semibold mb-1">
-                  Talk anonymously with strangers
+                  {mode === "video" ? "Meet face to face anonymously" : "Talk anonymously with strangers"}
                 </h2>
                 <p className="text-gray-500 text-sm">
                   Add filters to find like-minded people, or go random.
                 </p>
+              </div>
+
+              <div className="mb-5 grid grid-cols-2 gap-2 rounded-xl bg-white/[0.04] border border-white/[0.08] p-1">
+                <button
+                  type="button"
+                  onClick={() => setMode("chat")}
+                  className={`flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-semibold transition-all ${
+                    mode === "chat"
+                      ? "bg-emerald-500 text-white shadow-lg shadow-emerald-500/20"
+                      : "text-gray-400 hover:text-white hover:bg-white/[0.06]"
+                  }`}
+                >
+                  <MessageCircle size={17} />
+                  Chat
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMode("video")}
+                  className={`flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-semibold transition-all ${
+                    mode === "video"
+                      ? "bg-emerald-500 text-white shadow-lg shadow-emerald-500/20"
+                      : "text-gray-400 hover:text-white hover:bg-white/[0.06]"
+                  }`}
+                >
+                  <Video size={17} />
+                  Video call
+                </button>
               </div>
 
               <div className="mb-5">
@@ -100,10 +128,10 @@ export default function HomePage({
               </div>
 
               <button
-                onClick={() => onStartChat(filters)}
+                onClick={() => onStartChat(filters, mode)}
                 className="w-full py-3.5 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-white font-semibold rounded-xl transition-all duration-200 shadow-lg shadow-emerald-500/20 hover:shadow-emerald-500/30 active:scale-[0.98]"
               >
-                Start Chat
+                {mode === "video" ? "Start Video Call" : "Start Chat"}
               </button>
             </>
           )}

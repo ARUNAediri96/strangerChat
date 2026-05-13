@@ -7,6 +7,7 @@
       - `session_id` (uuid, unique) - anonymous session identifier
       - `filters` (text[]) - array of filter tags for matching
       - `public_key` (text) - X25519 public key for E2E encryption
+      - `mode` (text) - chat or video matching preference
       - `created_at` (timestamptz) - when user entered the pool
     - `active_chats`
       - `id` (uuid, primary key) - chat session ID
@@ -15,6 +16,7 @@
       - `user_a_public_key` (text) - first user's encryption public key
       - `user_b_public_key` (text) - second user's encryption public key
       - `matched_filters` (text[]) - filters that matched
+      - `mode` (text) - chat or video session type
       - `created_at` (timestamptz) - when chat was created
       - `expires_at` (timestamptz) - auto-expiry time
     - `chat_reports`
@@ -46,6 +48,7 @@ CREATE TABLE IF NOT EXISTS waiting_pool (
   session_id uuid UNIQUE NOT NULL,
   filters text[] NOT NULL DEFAULT '{}',
   public_key text NOT NULL DEFAULT '',
+  mode text NOT NULL DEFAULT 'chat' CHECK (mode IN ('chat', 'video')),
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -57,6 +60,7 @@ CREATE TABLE IF NOT EXISTS active_chats (
   user_a_public_key text NOT NULL DEFAULT '',
   user_b_public_key text NOT NULL DEFAULT '',
   matched_filters text[] NOT NULL DEFAULT '{}',
+  mode text NOT NULL DEFAULT 'chat' CHECK (mode IN ('chat', 'video')),
   created_at timestamptz NOT NULL DEFAULT now(),
   expires_at timestamptz NOT NULL DEFAULT (now() + interval '2 hours')
 );
@@ -84,6 +88,7 @@ CREATE TABLE IF NOT EXISTS chat_events (
 -- Indexes for fast lookup
 CREATE INDEX IF NOT EXISTS idx_waiting_pool_session ON waiting_pool(session_id);
 CREATE INDEX IF NOT EXISTS idx_waiting_pool_filters ON waiting_pool USING GIN(filters);
+CREATE INDEX IF NOT EXISTS idx_waiting_pool_mode_created ON waiting_pool(mode, created_at);
 CREATE INDEX IF NOT EXISTS idx_active_chats_user_a ON active_chats(user_a_session);
 CREATE INDEX IF NOT EXISTS idx_active_chats_user_b ON active_chats(user_b_session);
 CREATE INDEX IF NOT EXISTS idx_active_chats_expires ON active_chats(expires_at);

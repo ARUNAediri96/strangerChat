@@ -62,6 +62,10 @@ function normalizeUuid(value) {
   return id || null;
 }
 
+function normalizeMode(value) {
+  return value === "video" ? "video" : "chat";
+}
+
 function parseJson(value, fallback) {
   if (value === null || value === undefined || value === "") return fallback;
   if (typeof value !== "string") return value;
@@ -104,6 +108,7 @@ async function joinPool(body) {
   const sessionId = normalizeUuid(body.sessionId);
   const filters = normalizeFilters(body.filters);
   const publicKey = String(body.publicKey || "");
+  const mode = normalizeMode(body.mode);
 
   if (!sessionId) return { status: 400, body: { error: "sessionId required" } };
 
@@ -114,8 +119,8 @@ async function joinPool(body) {
     await client.query("DELETE FROM waiting_pool WHERE session_id = $1", [sessionId]);
 
     const { rows: poolRows } = await client.query(
-      "SELECT * FROM waiting_pool WHERE session_id <> $1 ORDER BY created_at ASC FOR UPDATE",
-      [sessionId]
+      "SELECT * FROM waiting_pool WHERE session_id <> $1 AND mode = $2 ORDER BY created_at ASC FOR UPDATE",
+      [sessionId, mode]
     );
 
     let bestMatch = null;
@@ -143,8 +148,8 @@ async function joinPool(body) {
         ]);
         await client.query(
           `INSERT INTO active_chats
-            (id, user_a_session, user_b_session, user_a_public_key, user_b_public_key, matched_filters, expires_at)
-           VALUES ($1, $2, $3, $4, $5, $6, NOW() + INTERVAL '2 hours')`,
+            (id, user_a_session, user_b_session, user_a_public_key, user_b_public_key, matched_filters, mode, expires_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, NOW() + INTERVAL '2 hours')`,
           [
             chatId,
             sessionId,
@@ -152,6 +157,7 @@ async function joinPool(body) {
             publicKey,
             bestMatch.public_key || "",
             matchedFilters,
+            mode,
           ]
         );
 
@@ -164,14 +170,15 @@ async function joinPool(body) {
             peerPublicKey: bestMatch.public_key,
             matchedFilters,
             isInitiator: true,
+            mode,
           },
         };
       }
     }
 
     await client.query(
-      "INSERT INTO waiting_pool (session_id, filters, public_key) VALUES ($1, $2, $3)",
-      [sessionId, filters, publicKey]
+      "INSERT INTO waiting_pool (session_id, filters, public_key, mode) VALUES ($1, $2, $3, $4)",
+      [sessionId, filters, publicKey, mode]
     );
     await client.query("COMMIT");
     return { status: 200, body: { matched: false, status: "waiting" } };
@@ -208,6 +215,7 @@ async function checkMatch(body) {
         peerPublicKey: isUserA ? chat.user_b_public_key : chat.user_a_public_key,
         matchedFilters: normalizeFilters(chat.matched_filters),
         isInitiator: isUserA,
+        mode: normalizeMode(chat.mode),
       },
     };
   }

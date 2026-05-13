@@ -13,6 +13,7 @@ interface MatchRequest {
   sessionId: string;
   filters: string[];
   publicKey: string;
+  mode?: "chat" | "video";
 }
 
 function calculateSimilarity(filtersA: string[], filtersB: string[]): number {
@@ -26,6 +27,10 @@ function calculateSimilarity(filtersA: string[], filtersB: string[]): number {
     if (setB.has(tag)) matches++;
   }
   return (matches / Math.max(setA.size, setB.size)) * 100;
+}
+
+function normalizeMode(value: unknown): "chat" | "video" {
+  return value === "video" ? "video" : "chat";
 }
 
 Deno.serve(async (req: Request) => {
@@ -47,6 +52,7 @@ Deno.serve(async (req: Request) => {
       if (action === "join") {
         const body: MatchRequest = await req.json();
         const { sessionId, filters, publicKey } = body;
+        const mode = normalizeMode(body.mode);
 
         if (!sessionId) {
           return new Response(
@@ -63,6 +69,7 @@ Deno.serve(async (req: Request) => {
           .from("waiting_pool")
           .select("*")
           .neq("session_id", sessionId)
+          .eq("mode", mode)
           .order("created_at", { ascending: true });
 
         if (poolError) {
@@ -106,6 +113,7 @@ Deno.serve(async (req: Request) => {
                 user_a_public_key: publicKey || "",
                 user_b_public_key: bestMatch.public_key || "",
                 matched_filters: matchedFilters,
+                mode,
               })
               .select()
               .single();
@@ -124,6 +132,7 @@ Deno.serve(async (req: Request) => {
                 peerPublicKey: bestMatch.public_key,
                 matchedFilters: matchedFilters,
                 isInitiator: true,
+                mode,
               }),
               { headers: { ...corsHeaders, "Content-Type": "application/json" } }
             );
@@ -135,6 +144,7 @@ Deno.serve(async (req: Request) => {
           session_id: sessionId,
           filters,
           public_key: publicKey || "",
+          mode,
         });
 
         if (insertError) {
@@ -178,6 +188,7 @@ Deno.serve(async (req: Request) => {
               peerPublicKey: isUserA ? chat.user_b_public_key : chat.user_a_public_key,
               matchedFilters: chat.matched_filters,
               isInitiator: isUserA,
+              mode: normalizeMode(chat.mode),
             }),
             { headers: { ...corsHeaders, "Content-Type": "application/json" } }
           );

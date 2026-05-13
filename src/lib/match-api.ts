@@ -6,9 +6,12 @@ export interface MatchResult {
   peerPublicKey?: string;
   matchedFilters?: string[];
   isInitiator?: boolean;
+  mode?: ChatMode;
   status?: string;
   error?: string;
 }
+
+export type ChatMode = "chat" | "video";
 
 interface ChatEvent {
   id: number;
@@ -48,9 +51,10 @@ async function apiGet<T>(path: string): Promise<T> {
 export async function joinPool(
   sessionId: string,
   filters: string[],
-  publicKey: string
+  publicKey: string,
+  mode: ChatMode
 ): Promise<MatchResult> {
-  return apiCall("/api/match/join", { sessionId, filters, publicKey });
+  return apiCall("/api/match/join", { sessionId, filters, publicKey, mode });
 }
 
 export async function checkMatch(sessionId: string): Promise<MatchResult> {
