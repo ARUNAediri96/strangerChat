@@ -19,6 +19,8 @@
     />
     <meta name="robots" content="index, follow" />
     <link rel="canonical" href="https://stranger-chat-pink.vercel.app/" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.svg" />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://stranger-chat-pink.vercel.app/" />
     <meta property="og:title" content="StrangerChat - Anonymous Chat With Strangers" />
@@ -39,7 +41,59 @@
     <meta name="twitter:image" content="https://stranger-chat-pink.vercel.app/og-image.svg" />
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <main>
+        <section aria-labelledby="hero-title">
+          <h1 id="hero-title">StrangerChat - Anonymous Chat With Strangers</h1>
+          <p>
+            StrangerChat is a simple anonymous chat app for meeting strangers online without creating an account. Start a private conversation, add optional interest filters, and get matched with someone who wants to talk about similar topics.
+          </p>
+          <p>
+            The chat experience is designed for fast, ephemeral conversations. Messages are protected with end-to-end encryption during active sessions, and the interface keeps the focus on a direct one-to-one conversation instead of profiles, feeds, or permanent social history.
+          </p>
+          <nav aria-label="StrangerChat sections">
+            <a href="#how-it-works">How it works</a>
+            <a href="#privacy">Privacy</a>
+            <a href="#safety">Safety</a>
+            <a href="#features">Features</a>
+          </nav>
+        </section>
+
+        <section id="how-it-works" aria-labelledby="how-it-works-title">
+          <h2 id="how-it-works-title">How StrangerChat Works</h2>
+          <p>
+            To begin, choose interests such as music, gaming, movies, study, travel, or technology, then start searching. StrangerChat uses those filters to help you find a stranger with overlapping interests, or you can skip filters and begin a fully random anonymous chat.
+          </p>
+          <p>
+            When a match is found, the app opens a focused chat room where both people can exchange messages, type naturally, skip to another stranger, or leave the conversation at any time. The goal is to make meeting new people quick, lightweight, and comfortable.
+          </p>
+        </section>
+
+        <section id="privacy" aria-labelledby="privacy-title">
+          <h2 id="privacy-title">Private And Ephemeral By Design</h2>
+          <p>
+            StrangerChat does not require public profiles or personal biographies before you can talk. The anonymous chat flow is built around temporary sessions, interest-based matching, and encrypted messaging so conversations feel more private than a traditional social network.
+          </p>
+          <p>
+            Because chats are ephemeral, users can enjoy spontaneous conversations without turning every message into a permanent identity trail. This makes the app useful for quick social breaks, casual questions, language practice, or meeting someone new around a shared interest.
+          </p>
+        </section>
+
+        <section id="safety" aria-labelledby="safety-title">
+          <h2 id="safety-title">Safety Controls</h2>
+          <p>
+            Anonymous conversation works best when people stay in control. StrangerChat includes simple actions to stop searching, skip a match, leave a chat, or report a conversation. These controls help users move away from uncomfortable chats quickly and continue only when the conversation feels worthwhile.
+          </p>
+        </section>
+
+        <section id="features" aria-labelledby="features-title">
+          <h2 id="features-title">Anonymous Chat Features</h2>
+          <p>
+            StrangerChat combines anonymous matching, optional interest filters, end-to-end encrypted messages, typing indicators, skip controls, report controls, and a clean mobile-friendly interface. It is built for people who want a direct chat with strangers without extra setup.
+          </p>
+        </section>
+      </main>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
