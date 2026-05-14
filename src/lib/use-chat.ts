@@ -32,7 +32,7 @@ export interface VideoSignal {
   payload: Record<string, unknown>;
 }
 
-const AI_FALLBACK_WAIT_MS = 5000;
+const AI_FALLBACK_WAIT_MS = 3000;
 
 interface AiPersona {
   startedChat: boolean;
