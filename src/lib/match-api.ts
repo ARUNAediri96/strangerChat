@@ -24,6 +24,24 @@ interface EventResponse {
   events: ChatEvent[];
 }
 
+export interface AssistantReplyRequest {
+  conversationId: string;
+  sessionId: string;
+  message: string;
+  history: Array<{
+    role: "user" | "assistant";
+    text: string;
+  }>;
+}
+
+export interface AssistantReplyResponse {
+  messages: string[];
+}
+
+export interface IceServersResponse {
+  iceServers: RTCIceServer[];
+}
+
 type BroadcastHandler = (event: { payload: Record<string, unknown> }) => void;
 
 async function apiCall<T>(path: string, body: object): Promise<T> {
@@ -74,6 +92,17 @@ export async function reportChat(
   reason: string
 ): Promise<void> {
   await apiCall("/api/match/report", { chatId, reporterSession, reason });
+}
+
+export async function requestAssistantMessage(
+  request: AssistantReplyRequest
+): Promise<AssistantReplyResponse> {
+  return apiCall("/api/chat/assistant-message", request);
+}
+
+export async function getIceServers(): Promise<RTCIceServer[]> {
+  const data = await apiGet<IceServersResponse>("/api/video/ice-servers");
+  return data.iceServers;
 }
 
 export function createChatChannel(chatId: string) {

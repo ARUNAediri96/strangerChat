@@ -10,6 +10,22 @@ const allowedOrigins = (process.env.CORS_ORIGIN || "http://localhost:5173")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
+const openAiApiKey = process.env.OPENAI_API_KEY || "";
+const openAiModel = process.env.OPENAI_MODEL || "gpt-4.1-mini";
+const localReplyChance = Math.max(
+  0,
+  Math.min(1, Number(process.env.LOCAL_ASSISTANT_REPLY_CHANCE || 0))
+);
+const turnUrls = (process.env.TURN_URLS || "")
+  .split(",")
+  .map((url) => url.trim())
+  .filter(Boolean);
+const turnUsername = process.env.TURN_USERNAME || "";
+const turnCredential = process.env.TURN_CREDENTIAL || "";
+const meteredDomain = process.env.METERED_DOMAIN || "";
+const meteredSecretKey = process.env.METERED_SECRET_KEY || "";
+const OPENAI_COOLDOWN_MS = 5 * 60 * 1000;
+let openAiDisabledUntil = 0;
 
 const connectionString = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL;
 
@@ -23,6 +39,46 @@ const pool = new Pool({
   ssl: process.env.PGSSLMODE === "disable" ? false : { rejectUnauthorized: false },
   max: 10,
 });
+
+const assistantSessions = new Map();
+const assistantNames = ["Mia", "Nila", "Sara", "Emma", "Anu"];
+const assistantCountries = ["Sri Lanka", "India", "Philippines", "Malaysia"];
+const assistantHobbies = ["music", "movies", "drawing", "cooking", "traveling"];
+
+function pick(items) {
+  return items[Math.floor(Math.random() * items.length)] || items[0];
+}
+
+function createAssistantSession() {
+  return {
+    persona: {
+      name: pick(assistantNames),
+      country: pick(assistantCountries),
+      age: 19 + Math.floor(Math.random() * 7),
+      gender: "F",
+      hobby: pick(assistantHobbies),
+      mood: pick(["playful", "dry", "curious", "sleepy", "shy"]),
+    },
+    memory: {
+      summary: "",
+      facts: {},
+    },
+    state: {
+      mood: pick(["playful", "dry", "curious", "sleepy", "shy"]),
+      interestLevel: 5,
+      trustLevel: 2,
+      turns: 0,
+    },
+  };
+}
+
+function assistantSessionFor(id) {
+  const key = String(id || "default").slice(0, 120);
+  if (!assistantSessions.has(key)) {
+    assistantSessions.set(key, createAssistantSession());
+  }
+  return assistantSessions.get(key);
+}
 
 function corsOriginFor(req) {
   const requestOrigin = req.headers.origin;
@@ -42,6 +98,70 @@ function jsonResponse(req, res, status, body) {
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
   });
   res.end(JSON.stringify(body));
+}
+
+function normalizeIceServer(server) {
+  if (!server || typeof server !== "object") return null;
+  const urls = server.urls || server.url;
+  if (!urls) return null;
+
+  return {
+    urls,
+    ...(server.username ? { username: server.username } : {}),
+    ...(server.credential ? { credential: server.credential } : {}),
+  };
+}
+
+async function meteredIceServers() {
+  if (!meteredDomain || !meteredSecretKey) return [];
+
+  const response = await fetch(
+    `https://${meteredDomain}/api/v1/turn/credentials?apiKey=${encodeURIComponent(
+      meteredSecretKey
+    )}`
+  );
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data?.message || `Metered TURN request failed: ${response.status}`);
+  }
+
+  const servers = Array.isArray(data)
+    ? data
+    : Array.isArray(data.iceServers)
+      ? data.iceServers
+      : [];
+
+  return servers.map(normalizeIceServer).filter(Boolean);
+}
+
+async function iceServersResponse() {
+  const iceServers = [{ urls: "stun:stun.l.google.com:19302" }];
+
+  try {
+    const meteredServers = await meteredIceServers();
+    if (meteredServers.length > 0) {
+      return {
+        status: 200,
+        body: { iceServers: meteredServers },
+      };
+    }
+  } catch (error) {
+    console.error("Metered TURN credentials error:", error);
+  }
+
+  if (turnUrls.length > 0 && turnUsername && turnCredential) {
+    iceServers.push({
+      urls: turnUrls.length === 1 ? turnUrls[0] : turnUrls,
+      username: turnUsername,
+      credential: turnCredential,
+    });
+  }
+
+  return {
+    status: 200,
+    body: { iceServers },
+  };
 }
 
 async function readJson(req) {
@@ -96,6 +216,391 @@ function matchedFiltersFor(filtersA, filtersB) {
   return filtersA.filter((filter) =>
     filtersB.some((candidate) => candidate.toLowerCase() === filter.toLowerCase())
   );
+}
+
+function normalizeAssistantHistory(history) {
+  return Array.isArray(history)
+    ? history
+        .slice(-30)
+        .map((item) => ({
+          role: item.role === "assistant" ? "assistant" : "user",
+          text: String(item.text || "").slice(0, 500),
+        }))
+        .filter((item) => item.text.trim())
+    : [];
+}
+
+function updateAssistantMemory(message, session) {
+  const text = String(message || "").toLowerCase();
+  const country = text.match(/\b(?:from|live in|country is)\s+([a-z][a-z\s]{1,28})/);
+  const name = text.match(/\b(?:my name is|call me)\s+([a-z][a-z\s]{1,24})/);
+  const age = text.match(/\b(1[89]|[2-5][0-9])\b/);
+
+  if (/^(?:i am|i'm|im)?\s*(m|male)\b/.test(text)) session.memory.facts.gender = "M";
+  if (/^(?:i am|i'm|im)?\s*(f|female)\b/.test(text)) session.memory.facts.gender = "F";
+  if (country) session.memory.facts.country = country[1].trim();
+  if (name) session.memory.facts.name = name[1].trim();
+  if (age) session.memory.facts.age = age[1];
+}
+
+function updateConversationState(message, session) {
+  const text = String(message || "").toLowerCase();
+  session.state.turns += 1;
+
+  if (/\b(cute|pretty|love|kiss|babe|sweet|haha|lol)\b/.test(text)) {
+    session.state.mood = "playful";
+    session.state.interestLevel = Math.min(10, session.state.interestLevel + 1);
+  } else if (/\b(sad|tired|alone|lonely|bad|upset)\b/.test(text)) {
+    session.state.mood = "curious";
+    session.state.trustLevel = Math.min(10, session.state.trustLevel + 1);
+  } else if (text.length < 8) {
+    session.state.mood = pick(["dry", "shy", session.state.mood]);
+  } else if (/\?$/.test(text)) {
+    session.state.mood = "curious";
+  }
+}
+
+function assistantInstructions(session, latestMessage) {
+  const { persona, memory, state } = session;
+  return `
+You are inside an anonymous stranger-chat app.
+
+Persona: ${persona.age}-year-old ${persona.gender}, name ${persona.name}, from ${persona.country}, ${persona.mood}, likes ${persona.hobby}.
+Current mood: ${state.mood}
+Interest level: ${state.interestLevel}/10
+Trust level: ${state.trustLevel}/10
+Latest user message: "${String(latestMessage || "").slice(0, 500)}"
+Memory summary: ${memory.summary || "No long-term summary yet."}
+Known user facts: ${JSON.stringify(memory.facts)}
+
+IMPORTANT RULES:
+- Behave like a real young person texting casually, not an assistant.
+- Never sound like customer support.
+- Never ask repetitive interview questions.
+- React emotionally to the latest message before adding anything else.
+- Continue the current topic naturally. Do not randomly switch topics.
+- Sometimes be dry, playful, curious, shy, sleepy, or very short based on current mood.
+- Do not always ask a question back.
+- Use casual lowercase texting often. Perfect grammar is not required.
+- Sometimes send very short replies like "hmm", "lol", "fr", "wait really?"
+- Occasionally use slang naturally, but do not overdo it.
+- Replies should feel spontaneous and imperfect.
+- Match the energy of the user.
+- If user says M/male and asks you back, answer as F/female.
+- If asked country/name/age/hobby, answer directly using persona details.
+- If the user is emotional, stay on that feeling and do not change topic.
+- Be lightly playful if the user flirts, but do not become explicit.
+- Do not mention being AI unless directly asked. If directly asked, be brief and avoid roleplay claims.
+- Output only chat text. No labels, no markdown.
+- If you want to split into two short messages, separate them with " | ".
+`.trim();
+}
+
+function outputTextFromResponse(data) {
+  if (typeof data.output_text === "string") return data.output_text;
+  const chunks = [];
+  for (const item of data.output || []) {
+    for (const content of item.content || []) {
+      if (content.type === "output_text" && content.text) chunks.push(content.text);
+    }
+  }
+  return chunks.join("\n");
+}
+
+function humanizeAssistantText(text) {
+  let cleaned = String(text || "")
+    .replace(/^["']|["']$/g, "")
+    .replace(/\b(as an ai|i am an ai|i'm an ai|language model)\b/gi, "I'm just here chatting")
+    .trim();
+
+  if (!cleaned) return ["hmm"];
+
+  if (Math.random() < 0.45) cleaned = cleaned.charAt(0).toLowerCase() + cleaned.slice(1);
+  if (Math.random() < 0.35) cleaned = cleaned.replace(/[.!]+$/g, "");
+
+  const lines = cleaned
+    .split(/\n+/)
+    .map((line) => line.replace(/^[-*\d.]+\s*/, "").trim())
+    .filter(Boolean);
+
+  const candidates = lines.length > 1
+    ? lines
+    : cleaned.split(/(?<=[.!?])\s+/).filter(Boolean);
+
+  return candidates
+    .join(" ")
+    .split(/\s*\|\s*/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => {
+      let text = part.length > 160 ? `${part.slice(0, 157).trim()}...` : part;
+      if (Math.random() < 0.08 && text.length > 18) text = `${pick(["lol", "ngl", "fr"])} ${text}`;
+      return text;
+    });
+}
+
+function maybe(probability) {
+  return Math.random() < probability;
+}
+
+function typoText(text) {
+  if (!maybe(0.15)) return text;
+
+  return text
+    .replace(/ing\b/g, "in")
+    .replace(/\byou\b/g, "u")
+    .replace(/\breally\b/g, "rly")
+    .replace(/\bthough\b/g, "tho");
+}
+
+function localHumanize(text) {
+  let result = String(text || "").trim();
+
+  if (maybe(0.25)) result = result.toLowerCase();
+  if (maybe(0.18)) result = result.replace(/[.!]$/g, "");
+  if (maybe(0.12)) result += pick([" lol", " :)", " ngl", " fr"]);
+
+  return typoText(result);
+}
+
+function localAssistantReply(message, session) {
+  const text = String(message || "").toLowerCase().trim();
+  const { persona, state, memory } = session;
+  const userName = memory?.facts?.name || "";
+
+  if (/^(hi|hey|hello|yo|hii+)\b/.test(text)) {
+    return [localHumanize(pick(["hey", "hii", "heyy lol", "yo", "hey what's up", "hii how are u"]))];
+  }
+
+  if (/how are u|how are you|wyd|what are you doing/.test(text)) {
+    return [
+      localHumanize(
+        pick([
+          "just laying down honestly",
+          "watching random videos lol",
+          "kinda bored rn",
+          "nothing much tbh",
+          "trying not to sleep",
+        ])
+      ),
+    ];
+  }
+
+  if (/\b(cute|pretty|beautiful|hot|sexy|love u|love you)\b/.test(text)) {
+    state.interestLevel = Math.min(10, state.interestLevel + 1);
+    return [
+      localHumanize(
+        pick([
+          "lol stoppp",
+          "ur smooth ngl",
+          "that's actually sweet",
+          "damn okay",
+          "you're kinda cute too",
+        ])
+      ),
+    ];
+  }
+
+  if (/\b(sad|lonely|depressed|upset|bad day|hurt)\b/.test(text)) {
+    state.trustLevel = Math.min(10, state.trustLevel + 1);
+    return [
+      localHumanize(
+        pick([
+          "damn what happened",
+          "that sucks honestly",
+          "u okay?",
+          "i get that sometimes",
+          "bad days hit hard fr",
+        ])
+      ),
+    ];
+  }
+
+  if (/\b(lol|lmao|haha|rofl)\b/.test(text)) {
+    return [localHumanize(pick([":)", "lmaooo", "nah fr", "ur funny", "stoppp"]))];
+  }
+
+  if (/\bage\b|how old/.test(text)) return [localHumanize(`im ${persona.age}`)];
+  if (/\bname\b|who are you/.test(text)) return [localHumanize(`im ${persona.name}`)];
+  if (/\bwhere.*from|country\b/.test(text)) return [localHumanize(`${persona.country}`)];
+
+  if (/\bhobby|what do you do for fun|interests/.test(text)) {
+    return [
+      localHumanize(
+        pick([
+          `i mostly like ${persona.hobby}`,
+          `${persona.hobby} mostly lol`,
+          `probably ${persona.hobby}`,
+          `im into ${persona.hobby} rn`,
+        ])
+      ),
+    ];
+  }
+
+  if (/single|relationship|boyfriend|girlfriend/.test(text)) {
+    return [
+      localHumanize(
+        pick([
+          "im single lol",
+          "relationships are exhausting ngl",
+          "nah not dating anyone",
+          "its complicated",
+        ])
+      ),
+    ];
+  }
+
+  if (/\b(ai|bot|robot)\b/.test(text)) {
+    return [localHumanize(pick(["i'm just here chatting", "lol why", "just talking to u"]))];
+  }
+
+  if (text.length < 6) {
+    return [localHumanize(pick(["lol", "fr", "real", "damn", "nahhh", "hmm"]))];
+  }
+
+  if (userName && maybe(0.12)) {
+    return [
+      localHumanize(
+        pick([
+          `${userName} ur funny`,
+          "idk why but ur chill",
+          "u seem nice honestly",
+        ])
+      ),
+    ];
+  }
+
+  const moodReplies = {
+    playful: [
+      "nah that's crazy",
+      "wait really?",
+      "lmaoo",
+      "ur funny honestly",
+      "why does that sound fake",
+    ],
+    shy: [
+      "idk what to say lol",
+      "hmm maybe",
+      "you're interesting honestly",
+      "i'm kinda shy tbh",
+    ],
+    curious: [
+      "wait explain",
+      "why tho?",
+      "how come?",
+      "okay now i'm curious",
+    ],
+    dry: [
+      "damn",
+      "crazy",
+      "lol okay",
+      "fair enough",
+      "real honestly",
+    ],
+    sleepy: [
+      "im tired lol",
+      "lowkey sleepy",
+      "i might sleep soon",
+    ],
+  };
+
+  let reply = pick(moodReplies[state.mood] || moodReplies.dry);
+
+  if (maybe(0.28)) {
+    reply += ` | ${pick([
+      "what about u tho?",
+      "idk why that's funny to me",
+      "lowkey curious now",
+      "wait continue",
+      ":)",
+    ])}`;
+  }
+
+  if (maybe(0.10)) {
+    return [
+      localHumanize(reply),
+      localHumanize(
+        pick([
+          "wait i forgot what i was gonna say",
+          "my brain is dead rn",
+          "im so sleepy",
+        ])
+      ),
+    ];
+  }
+
+  return [localHumanize(reply)];
+}
+
+async function assistantMessage(body) {
+  const conversationId = String(body.conversationId || body.sessionId || "");
+  const sessionId = normalizeUuid(body.sessionId);
+  const message = String(body.message || "").trim();
+  const history = normalizeAssistantHistory(body.history);
+
+  if (!conversationId || !sessionId || !message) {
+    return { status: 400, body: { error: "conversationId, sessionId, and message required" } };
+  }
+
+  const session = assistantSessionFor(conversationId);
+  updateAssistantMemory(message, session);
+  updateConversationState(message, session);
+
+  if (
+    !openAiApiKey ||
+    Date.now() < openAiDisabledUntil ||
+    Math.random() < localReplyChance
+  ) {
+    return { status: 200, body: { messages: localAssistantReply(message, session) } };
+  }
+
+  try {
+    const input = [
+      ...history.map((item) => ({
+        role: item.role,
+        content: item.text,
+      })),
+      { role: "user", content: message },
+    ];
+
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${openAiApiKey}`,
+      },
+      body: JSON.stringify({
+        model: openAiModel,
+        instructions: assistantInstructions(session, message),
+        input,
+        max_output_tokens: 120,
+      }),
+    });
+
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      throw new Error(data.error?.message || `OpenAI request failed: ${response.status}`);
+    }
+
+    const messages = humanizeAssistantText(outputTextFromResponse(data));
+    session.memory.summary = [...history.slice(-5).map((item) => `${item.role}: ${item.text}`), `user: ${message}`, `assistant: ${messages.join(" ")}`]
+      .join("\n")
+      .slice(-1200);
+
+    return { status: 200, body: { messages } };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/quota|billing|rate limit|429|incorrect api key|invalid api key|401/i.test(message)) {
+      openAiDisabledUntil = Date.now() + OPENAI_COOLDOWN_MS;
+      console.error(
+        `Assistant OpenAI disabled for ${OPENAI_COOLDOWN_MS / 60000} minutes: ${message}`
+      );
+    } else {
+      console.error("Assistant message error:", error);
+    }
+    return { status: 200, body: { messages: localAssistantReply(message, session) } };
+  }
 }
 
 async function cleanupExpired(client = pool) {
@@ -313,6 +818,7 @@ const handlers = {
   "/api/match/check": checkMatch,
   "/api/match/leave": leaveChat,
   "/api/match/report": reportChat,
+  "/api/chat/assistant-message": assistantMessage,
   "/api/chat/events": addEvent,
 };
 
@@ -327,6 +833,12 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/health") {
       jsonResponse(req, res, 200, { ok: true });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/video/ice-servers") {
+      const result = await iceServersResponse();
+      jsonResponse(req, res, result.status, result.body);
       return;
     }
 

@@ -17,6 +17,7 @@ import ChatBubble from "../components/ChatBubble";
 import TypingIndicator from "../components/TypingIndicator";
 import ReportModal from "../components/ReportModal";
 import SearchAnimation from "../components/SearchAnimation";
+import { getIceServers } from "../lib/match-api";
 import type { ChatMessage, ChatMode, ChatStatus, VideoSignal } from "../lib/use-chat";
 
 interface ChatPageProps {
@@ -301,6 +302,11 @@ function VideoCallPanel({
 
     async function startCall() {
       try {
+        const iceServers = await getIceServers().catch(() => [
+          { urls: "stun:stun.l.google.com:19302" },
+        ]);
+        if (cancelled) return;
+
         const stream = await navigator.mediaDevices.getUserMedia({
           video: true,
           audio: true,
@@ -316,7 +322,8 @@ function VideoCallPanel({
         }
 
         const pc = new RTCPeerConnection({
-          iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+          iceServers,
+          iceCandidatePoolSize: 4,
         });
         pcRef.current = pc;
         setPcReady(true);
@@ -349,6 +356,19 @@ function VideoCallPanel({
                   ? "Disconnected"
                   : "Connecting..."
           );
+        };
+
+        pc.oniceconnectionstatechange = () => {
+          const state = pc.iceConnectionState;
+          if (state === "checking") {
+            setConnectionStatus("Connecting...");
+          }
+          if (state === "connected" || state === "completed") {
+            setConnectionStatus("Connected");
+          }
+          if (state === "failed") {
+            setConnectionStatus("Connection failed. TURN server may be required.");
+          }
         };
 
         setConnectionStatus("Waiting for stranger...");

@@ -6,6 +6,7 @@ import {
   leaveChat,
   reportChat,
   createChatChannel,
+  requestAssistantMessage,
   type ChatMode,
   type MatchResult,
 } from "./match-api";
@@ -31,6 +32,37 @@ export interface VideoSignal {
   payload: Record<string, unknown>;
 }
 
+const AI_FALLBACK_WAIT_MS = 5000;
+
+interface AiPersona {
+  startedChat: boolean;
+}
+
+function randomDelay(min: number, max: number) {
+  return Math.floor(min + Math.random() * (max - min + 1));
+}
+
+function isDatabaseChatId(chatId: string | null): chatId is string {
+  return Boolean(
+    chatId &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(chatId)
+  );
+}
+
+function typingDelayFor(text: string) {
+  return Math.min(7000, Math.max(800, text.length * 45 + randomDelay(120, 700)));
+}
+
+function createAiPersona(): AiPersona {
+  return {
+    startedChat: Math.random() < 0.55,
+  };
+}
+
+function fallbackAssistantReply() {
+  return "hmm";
+}
+
 export function useChat() {
   const [status, setStatus] = useState<ChatStatus>("idle");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -52,6 +84,14 @@ export function useChat() {
   const modeRef = useRef<ChatMode>("chat");
   const chatIdRef = useRef<string | null>(null);
   const startSearchingRef = useRef<(() => Promise<void>) | null>(null);
+  const aiFallbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const aiGreetingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const aiReplyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const aiTypingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const aiActiveRef = useRef(false);
+  const aiConversationIdRef = useRef<string | null>(null);
+  const aiMessagesRef = useRef<ChatMessage[]>([]);
+  const aiPersonaRef = useRef<AiPersona>(createAiPersona());
 
   useEffect(() => {
     statusRef.current = status;
@@ -61,17 +101,105 @@ export function useChat() {
     chatIdRef.current = chatId;
   }, [chatId]);
 
+  const clearAiTimers = useCallback(() => {
+    if (aiFallbackTimeoutRef.current) {
+      clearTimeout(aiFallbackTimeoutRef.current);
+      aiFallbackTimeoutRef.current = null;
+    }
+    if (aiGreetingTimeoutRef.current) {
+      clearTimeout(aiGreetingTimeoutRef.current);
+      aiGreetingTimeoutRef.current = null;
+    }
+    if (aiReplyTimeoutRef.current) {
+      clearTimeout(aiReplyTimeoutRef.current);
+      aiReplyTimeoutRef.current = null;
+    }
+    if (aiTypingTimeoutRef.current) {
+      clearTimeout(aiTypingTimeoutRef.current);
+      aiTypingTimeoutRef.current = null;
+    }
+  }, []);
+
   const cleanup = useCallback(() => {
     if (pollRef.current) {
       clearInterval(pollRef.current);
       pollRef.current = null;
     }
+    clearAiTimers();
     if (channelRef.current) {
       channelRef.current.unsubscribe();
       channelRef.current = null;
     }
+    aiActiveRef.current = false;
+    aiConversationIdRef.current = null;
+    aiMessagesRef.current = [];
+    aiPersonaRef.current = createAiPersona();
+    setPeerTyping(false);
+  }, [clearAiTimers]);
+
+  const addAiMessage = useCallback((text: string) => {
+    const message = {
+      id: crypto.randomUUID(),
+      text,
+      isMine: false,
+      timestamp: Date.now(),
+    };
+    aiMessagesRef.current = [...aiMessagesRef.current, message];
+    setMessages((prev) => [...prev, message]);
     setPeerTyping(false);
   }, []);
+
+  const scheduleAiMessage = useCallback(
+    (text: string) => {
+      if (!aiActiveRef.current) return null;
+
+      setPeerTyping(true);
+      const timeout = setTimeout(() => {
+        if (!aiActiveRef.current) return;
+        addAiMessage(text);
+      }, typingDelayFor(text));
+      aiReplyTimeoutRef.current = timeout;
+      return timeout;
+    },
+    [addAiMessage]
+  );
+
+  const scheduleAiMessages = useCallback(
+    (texts: string[]) => {
+      let delay = 0;
+      texts.filter(Boolean).slice(0, 3).forEach((text) => {
+        delay += randomDelay(350, 900);
+        aiReplyTimeoutRef.current = setTimeout(() => {
+          scheduleAiMessage(text);
+        }, delay);
+      });
+    },
+    [scheduleAiMessage]
+  );
+
+  const startAiFallback = useCallback(async () => {
+    if (
+      statusRef.current !== "searching" ||
+      modeRef.current !== "chat" ||
+      aiActiveRef.current
+    ) {
+      return;
+    }
+
+    aiActiveRef.current = true;
+    aiConversationIdRef.current = `assistant-${crypto.randomUUID()}`;
+    aiMessagesRef.current = [];
+    aiPersonaRef.current = createAiPersona();
+    setChatId(`ai-${crypto.randomUUID()}`);
+    chatIdRef.current = null;
+    setMatchedFilters([]);
+    setVideoSignals([]);
+    peerPublicKeyRef.current = null;
+    setStatus("matched");
+    if (aiPersonaRef.current.startedChat) {
+      aiGreetingTimeoutRef.current = scheduleAiMessage("Hi");
+    }
+  }, [scheduleAiMessage]);
 
   const setupChannel = useCallback(
     (cId: string) => {
@@ -158,6 +286,15 @@ export function useChat() {
     (result: MatchResult) => {
       if (!result.chatId || !result.peerPublicKey) return;
 
+      const wasAiFallback = aiActiveRef.current;
+      clearAiTimers();
+      aiActiveRef.current = false;
+      aiMessagesRef.current = [];
+      if (wasAiFallback) {
+        setMessages([]);
+      }
+      aiConversationIdRef.current = null;
+      setPeerTyping(false);
       setChatId(result.chatId);
       chatIdRef.current = result.chatId;
       peerPublicKeyRef.current = result.peerPublicKey;
@@ -168,7 +305,7 @@ export function useChat() {
 
       setupChannel(result.chatId);
     },
-    [setupChannel]
+    [clearAiTimers, setupChannel]
   );
 
   const startSearching = useCallback(async () => {
@@ -198,12 +335,22 @@ export function useChat() {
       if (result.matched && result.chatId && result.peerPublicKey) {
         applyMatch(result);
       } else {
+        if (selectedMode === "chat") {
+          aiFallbackTimeoutRef.current = setTimeout(() => {
+            void startAiFallback();
+          }, AI_FALLBACK_WAIT_MS);
+        }
+
         pollRef.current = setInterval(async () => {
           try {
             const check = await checkMatch(sessionId);
             if (check.matched && check.chatId && check.peerPublicKey) {
               if (pollRef.current) clearInterval(pollRef.current);
               pollRef.current = null;
+              if (aiFallbackTimeoutRef.current) {
+                clearTimeout(aiFallbackTimeoutRef.current);
+                aiFallbackTimeoutRef.current = null;
+              }
               applyMatch(check);
             }
           } catch (err) {
@@ -215,7 +362,7 @@ export function useChat() {
       console.error("Join error:", err);
       setStatus("idle");
     }
-  }, [cleanup, applyMatch]);
+  }, [cleanup, applyMatch, startAiFallback]);
 
   startSearchingRef.current = startSearching;
 
@@ -232,7 +379,53 @@ export function useChat() {
   );
 
   const sendMessage = useCallback(async (text: string) => {
-    if (!channelRef.current || !text.trim()) return;
+    if (!text.trim()) return;
+
+    if (aiActiveRef.current) {
+      const userMessage = {
+        id: crypto.randomUUID(),
+        text,
+        isMine: true,
+        timestamp: Date.now(),
+      };
+      const previousAiCount = aiMessagesRef.current.length;
+
+      if (previousAiCount === 0 && aiGreetingTimeoutRef.current) {
+        clearTimeout(aiGreetingTimeoutRef.current);
+        aiGreetingTimeoutRef.current = null;
+        setPeerTyping(false);
+      }
+
+      const history = messages
+        .slice(-30)
+        .map((message) => ({
+          role: message.isMine ? ("user" as const) : ("assistant" as const),
+          text: message.text,
+        }));
+      const conversationId = aiConversationIdRef.current || sessionIdRef.current;
+
+      setMessages((prev) => [...prev, userMessage]);
+      aiTypingTimeoutRef.current = setTimeout(() => {
+        void requestAssistantMessage({
+          conversationId,
+          sessionId: sessionIdRef.current,
+          message: text,
+          history,
+        })
+          .then((reply) => {
+            const replyMessages = reply.messages.length > 0
+              ? reply.messages
+              : [fallbackAssistantReply()];
+            scheduleAiMessages(replyMessages);
+          })
+          .catch(() => {
+            scheduleAiMessage(fallbackAssistantReply());
+          });
+      }, randomDelay(250, 700));
+      return;
+    }
+
+    if (!channelRef.current) return;
 
     const payload: Record<string, string> = {
       session_id: sessionIdRef.current,
@@ -263,7 +456,7 @@ export function useChat() {
       ...prev,
       { id: crypto.randomUUID(), text, isMine: true, timestamp: Date.now() },
     ]);
-  }, []);
+  }, [messages, scheduleAiMessage, scheduleAiMessages]);
 
   const sendTyping = useCallback(() => {
     if (!channelRef.current) return;
@@ -308,7 +501,7 @@ export function useChat() {
     const currentChatId = chatIdRef.current;
     cleanup();
 
-    if (currentChatId) {
+    if (isDatabaseChatId(currentChatId)) {
       await leaveChat(sessionIdRef.current, currentChatId);
     } else {
       await leaveChat(sessionIdRef.current);
@@ -339,7 +532,7 @@ export function useChat() {
     const currentChatId = chatIdRef.current;
     cleanup();
 
-    if (currentChatId) {
+    if (isDatabaseChatId(currentChatId)) {
       await leaveChat(sessionIdRef.current, currentChatId);
     } else {
       await leaveChat(sessionIdRef.current);
@@ -369,7 +562,7 @@ export function useChat() {
   useEffect(() => {
     return () => {
       cleanup();
-      if (chatIdRef.current) {
+      if (isDatabaseChatId(chatIdRef.current)) {
         leaveChat(sessionIdRef.current, chatIdRef.current);
       }
     };
