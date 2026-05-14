@@ -33,8 +33,17 @@ export interface VideoSignal {
 }
 
 const AI_FALLBACK_WAIT_MS = 2000;
+const AI_SKIP_REAL_USER_WAIT_MS = 1500;
+const AI_SKIP_POLL_INTERVAL_MS = 500;
 const AI_IDLE_FOLLOW_UP_MIN_MS = 10000;
 const AI_IDLE_FOLLOW_UP_MAX_MS = 16000;
+
+interface SearchOptions {
+  aiFallbackWaitMs?: number;
+  pollIntervalMs?: number;
+  startAiFallbackTimerImmediately?: boolean;
+  forceAiFallbackAfterWait?: boolean;
+}
 
 interface AiPersona {
   startedChat: boolean;
@@ -85,7 +94,7 @@ export function useChat() {
   const filtersRef = useRef<string[]>([]);
   const modeRef = useRef<ChatMode>("chat");
   const chatIdRef = useRef<string | null>(null);
-  const startSearchingRef = useRef<(() => Promise<void>) | null>(null);
+  const startSearchingRef = useRef<((options?: SearchOptions) => Promise<void>) | null>(null);
   const aiFallbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const aiGreetingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const aiReplyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -228,13 +237,22 @@ export function useChat() {
 
   scheduleAiIdleFollowUpRef.current = scheduleAiIdleFollowUp;
 
-  const startAiFallback = useCallback(async () => {
+  const startAiFallback = useCallback(async (force = false) => {
     if (
-      statusRef.current !== "searching" ||
+      (!force && statusRef.current !== "searching") ||
       modeRef.current !== "chat" ||
       aiActiveRef.current
     ) {
       return;
+    }
+
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    if (aiFallbackTimeoutRef.current) {
+      clearTimeout(aiFallbackTimeoutRef.current);
+      aiFallbackTimeoutRef.current = null;
     }
 
     aiActiveRef.current = true;
@@ -242,12 +260,14 @@ export function useChat() {
     aiMessagesRef.current = [];
     aiIdleFollowUpCountRef.current = 0;
     aiPersonaRef.current = createAiPersona();
-    setChatId(`ai-${crypto.randomUUID()}`);
-    chatIdRef.current = null;
+    const aiChatId = `ai-${crypto.randomUUID()}`;
+    setChatId(aiChatId);
+    chatIdRef.current = aiChatId;
     setMatchedFilters([]);
     setVideoSignals([]);
     peerPublicKeyRef.current = null;
     setStatus("matched");
+    statusRef.current = "matched";
     if (aiPersonaRef.current.startedChat) {
       aiGreetingTimeoutRef.current = scheduleAiMessage("Hi");
     }
@@ -355,13 +375,14 @@ export function useChat() {
       setIsInitiator(Boolean(result.isInitiator));
       if (result.mode) setMode(result.mode);
       setStatus("matched");
+      statusRef.current = "matched";
 
       setupChannel(result.chatId);
     },
     [clearAiTimers, setupChannel]
   );
 
-  const startSearching = useCallback(async () => {
+  const startSearching = useCallback(async (options: SearchOptions = {}) => {
     cleanup();
     setMessages([]);
     setMatchedFilters([]);
@@ -371,27 +392,45 @@ export function useChat() {
     setVideoSignals([]);
 
     setStatus("generating-keys");
+    statusRef.current = "generating-keys";
     const keyPair = await generateKeyPair();
     keyPairRef.current = keyPair;
 
     if (statusRef.current !== "generating-keys") return;
 
     setStatus("searching");
+    statusRef.current = "searching";
 
     const sessionId = sessionIdRef.current;
     const filters = filtersRef.current;
     const selectedMode = modeRef.current;
+    const aiFallbackWaitMs = options.aiFallbackWaitMs ?? AI_FALLBACK_WAIT_MS;
+    const pollIntervalMs = options.pollIntervalMs ?? 2000;
+    const startAiFallbackTimerImmediately = Boolean(options.startAiFallbackTimerImmediately);
+    const forceAiFallbackAfterWait = Boolean(options.forceAiFallbackAfterWait);
+
+    if (selectedMode === "chat" && startAiFallbackTimerImmediately) {
+      aiFallbackTimeoutRef.current = setTimeout(() => {
+        void startAiFallback(forceAiFallbackAfterWait);
+      }, aiFallbackWaitMs);
+    }
 
     try {
       const result = await joinPool(sessionId, filters, keyPair.publicKey, selectedMode);
 
+      if (String(statusRef.current) !== "searching" || aiActiveRef.current) return;
+
       if (result.matched && result.chatId && result.peerPublicKey) {
+        if (aiFallbackTimeoutRef.current) {
+          clearTimeout(aiFallbackTimeoutRef.current);
+          aiFallbackTimeoutRef.current = null;
+        }
         applyMatch(result);
       } else {
-        if (selectedMode === "chat") {
+        if (selectedMode === "chat" && !startAiFallbackTimerImmediately) {
           aiFallbackTimeoutRef.current = setTimeout(() => {
             void startAiFallback();
-          }, AI_FALLBACK_WAIT_MS);
+          }, aiFallbackWaitMs);
         }
 
         pollRef.current = setInterval(async () => {
@@ -409,10 +448,11 @@ export function useChat() {
           } catch (err) {
             console.error("Poll error:", err);
           }
-        }, 2000);
+        }, pollIntervalMs);
       }
     } catch (err) {
       console.error("Join error:", err);
+      if (selectedMode === "chat" && startAiFallbackTimerImmediately) return;
       setStatus("idle");
     }
   }, [cleanup, applyMatch, startAiFallback]);
@@ -549,6 +589,8 @@ export function useChat() {
   }, [cleanup]);
 
   const skipChat = useCallback(async () => {
+    const wasAiChat = aiActiveRef.current;
+
     // Notify peer before cleanup
     if (channelRef.current) {
       await channelRef.current.send({
@@ -563,6 +605,10 @@ export function useChat() {
 
     if (isDatabaseChatId(currentChatId)) {
       await leaveChat(sessionIdRef.current, currentChatId);
+    } else if (wasAiChat) {
+      void leaveChat(sessionIdRef.current).catch((err) => {
+        console.error("AI skip cleanup error:", err);
+      });
     } else {
       await leaveChat(sessionIdRef.current);
     }
@@ -576,7 +622,16 @@ export function useChat() {
     setVideoSignals([]);
     peerPublicKeyRef.current = null;
 
-    startSearching();
+    startSearching(
+      wasAiChat
+        ? {
+            aiFallbackWaitMs: AI_SKIP_REAL_USER_WAIT_MS,
+            pollIntervalMs: AI_SKIP_POLL_INTERVAL_MS,
+            startAiFallbackTimerImmediately: true,
+            forceAiFallbackAfterWait: true,
+          }
+        : undefined
+    );
   }, [cleanup, startSearching]);
 
   const leaveCurrentChat = useCallback(async () => {
