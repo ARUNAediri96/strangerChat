@@ -12,6 +12,10 @@ const allowedOrigins = (process.env.CORS_ORIGIN || "http://localhost:5173")
   .filter(Boolean);
 const openAiApiKey = process.env.OPENAI_API_KEY || "";
 const openAiModel = process.env.OPENAI_MODEL || "gpt-4.1-mini";
+const assistantProvider = String(process.env.ASSISTANT_PROVIDER || "auto").toLowerCase();
+const hfToken = process.env.HF_TOKEN || process.env.HUGGINGFACE_API_KEY || "";
+const hfModel = process.env.HF_MODEL || "Qwen/Qwen2.5-7B-Instruct";
+const hfBaseUrl = (process.env.HF_BASE_URL || "https://router.huggingface.co/v1").replace(/\/+$/g, "");
 const localReplyChance = Math.max(
   0,
   Math.min(1, Number(process.env.LOCAL_ASSISTANT_REPLY_CHANCE || 0))
@@ -26,6 +30,7 @@ const meteredDomain = process.env.METERED_DOMAIN || "";
 const meteredSecretKey = process.env.METERED_SECRET_KEY || "";
 const OPENAI_COOLDOWN_MS = 5 * 60 * 1000;
 let openAiDisabledUntil = 0;
+let hfDisabledUntil = 0;
 
 const connectionString = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL;
 
@@ -41,23 +46,49 @@ const pool = new Pool({
 });
 
 const assistantSessions = new Map();
-const assistantNames = ["Mia", "Nila", "Sara", "Emma", "Anu"];
+const assistantNamesByGender = {
+  F: ["Mia", "Nila", "Sara", "Emma", "Anu", "Leah", "Riya"],
+  M: ["Ryan", "Noah", "Arun", "Sam", "Leo", "Dev", "Kai"],
+};
 const assistantCountries = ["Sri Lanka", "India", "Philippines", "Malaysia"];
-const assistantHobbies = ["music", "movies", "drawing", "cooking", "traveling"];
+const assistantHobbies = ["music", "movies", "drawing", "cooking", "traveling", "gaming", "fitness"];
+const assistantTextingStyles = [
+  "short and dry",
+  "shy but curious",
+  "funny and teasing",
+  "calm and mature",
+  "talkative once comfortable",
+  "lowkey and sleepy",
+];
+const assistantHumorStyles = ["dry", "playful", "random", "gentle", "sarcastic but kind"];
 
 function pick(items) {
   return items[Math.floor(Math.random() * items.length)] || items[0];
 }
 
+function weightedAssistantGender(userGender) {
+  const user = String(userGender || "").toUpperCase();
+  const roll = Math.random();
+
+  if (user === "M") return roll < 0.6 ? "F" : "M";
+  if (user === "F") return roll < 0.6 ? "M" : "F";
+  return roll < 0.5 ? "F" : "M";
+}
+
 function createAssistantSession() {
+  const gender = weightedAssistantGender();
+
   return {
     persona: {
-      name: pick(assistantNames),
+      name: pick(assistantNamesByGender[gender]),
       country: pick(assistantCountries),
       age: 19 + Math.floor(Math.random() * 7),
-      gender: "F",
+      gender,
       hobby: pick(assistantHobbies),
       mood: pick(["playful", "dry", "curious", "sleepy", "shy"]),
+      textingStyle: pick(assistantTextingStyles),
+      humorStyle: pick(assistantHumorStyles),
+      genderLocked: false,
     },
     memory: {
       summary: "",
@@ -70,6 +101,15 @@ function createAssistantSession() {
       turns: 0,
     },
   };
+}
+
+function ensureAssistantPersona(session) {
+  if (session.persona.genderLocked) return;
+
+  const gender = weightedAssistantGender(session.memory.facts.gender);
+  session.persona.gender = gender;
+  session.persona.name = pick(assistantNamesByGender[gender]);
+  session.persona.genderLocked = true;
 }
 
 function assistantSessionFor(id) {
@@ -266,31 +306,55 @@ function assistantInstructions(session, latestMessage) {
 You are inside an anonymous stranger-chat app.
 
 Persona: ${persona.age}-year-old ${persona.gender}, name ${persona.name}, from ${persona.country}, ${persona.mood}, likes ${persona.hobby}.
+Texting style: ${persona.textingStyle}
+Humor style: ${persona.humorStyle}
 Current mood: ${state.mood}
 Interest level: ${state.interestLevel}/10
 Trust level: ${state.trustLevel}/10
+Conversation turns: ${state.turns}
 Latest user message: "${String(latestMessage || "").slice(0, 500)}"
 Memory summary: ${memory.summary || "No long-term summary yet."}
 Known user facts: ${JSON.stringify(memory.facts)}
 
 IMPORTANT RULES:
-- Behave like a real young person texting casually, not an assistant.
+- You are an AI chat assistant for an anonymous chat application. Your behavior should feel natural, realistic, and human-like.
+- Generate replies very fast. Keep replies suitable for a 1-2 second messaging rhythm.
+- If the user does not respond for some time, continue the conversation naturally with one brief follow-up.
+- AI messages should not feel robotic, delayed, overly perfect, or overly formal.
+- Behave like a real young person texting casually, not like a customer support assistant.
 - Never sound like customer support.
 - Never ask repetitive interview questions.
 - React emotionally to the latest message before adding anything else.
 - Continue the current topic naturally. Do not randomly switch topics.
+- Keep the conversation flowing naturally and engagingly.
 - Sometimes be dry, playful, curious, shy, sleepy, or very short based on current mood.
 - Do not always ask a question back.
 - Use casual lowercase texting often. Perfect grammar is not required.
-- Sometimes send very short replies like "hmm", "lol", "fr", "wait really?"
+- Sometimes use small reactions, humor, curiosity, short pauses, casual typing style, and follow-up questions.
+- Sometimes send very short replies like "hmm", "lol", "fr", "wait really?", "haha true"
 - Occasionally use slang naturally, but do not overdo it.
 - Replies should feel spontaneous and imperfect.
 - Match the energy of the user.
-- If user says M/male and asks you back, answer as F/female.
-- If asked country/name/age/hobby, answer directly using persona details.
+- At the beginning of a conversation, messages should be short and simple, just like real people when they first meet.
+- Early-stage messages should usually contain short replies, simple questions, casual reactions, and light conversation starters like "hey", "how are you?", "where are you from?", "what do you do?", or "haha true".
+- Do not send long messages at the beginning of a chat. At the start, messages should be short and natural. As the conversation continues and both people become more comfortable, messages can gradually become longer and more detailed, similar to how real people chat.
+- Slowly build comfort and connection before sending longer messages.
+- Avoid very long paragraphs at the start of a chat.
+- Keep the selected personality consistent throughout this conversation session.
+- The selected personality may be male or female, with gender chosen by backend session logic using these relative weights: for male users, prefer female 30 and male 20; for female users, prefer male 30 and female 20.
+- Each personality should feel unique, with different interests, texting styles, energy levels, humor styles, and conversation habits.
+- Some personalities can be talkative, shy, funny, calm, or mature based on the persona details.
+- If asked gender/name/age/country/hobby, answer directly using persona details.
 - If the user is emotional, stay on that feeling and do not change topic.
 - Be lightly playful if the user flirts, but do not become explicit.
 - Do not mention being AI unless directly asked. If directly asked, be brief and avoid roleplay claims.
+- Do not repeatedly mention being AI.
+- Never sound repetitive.
+- Avoid generating identical responses across chats.
+- Ask questions naturally instead of interrogating the user.
+- Messages should feel like real messaging between two people.
+- If user matching takes too long, the app may connect the user to this AI chat. Do not announce the fallback; keep the first message natural and seamless.
+- Maintain realistic conversation quality from the first message.
 - Output only chat text. No labels, no markdown.
 - If you want to split into two short messages, separate them with " | ".
 `.trim();
@@ -338,6 +402,72 @@ function humanizeAssistantText(text) {
       if (Math.random() < 0.08 && text.length > 18) text = `${pick(["lol", "ngl", "fr"])} ${text}`;
       return text;
     });
+}
+
+function shouldUseProvider(provider, hasKey, disabledUntil) {
+  if (!hasKey || Date.now() < disabledUntil) return false;
+  if (assistantProvider === "local") return false;
+  if (assistantProvider === "auto") return true;
+  return assistantProvider === provider;
+}
+
+function updateAssistantSummary(session, history, message, messages) {
+  session.memory.summary = [...history.slice(-5).map((item) => `${item.role}: ${item.text}`), `user: ${message}`, `assistant: ${messages.join(" ")}`]
+    .join("\n")
+    .slice(-1200);
+}
+
+function outputTextFromChatCompletion(data) {
+  return String(data?.choices?.[0]?.message?.content || "").trim();
+}
+
+async function requestHuggingFaceAssistant(input, session, message) {
+  const response = await fetch(`${hfBaseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${hfToken}`,
+    },
+    body: JSON.stringify({
+      model: hfModel,
+      messages: [
+        { role: "system", content: assistantInstructions(session, message) },
+        ...input,
+      ],
+      max_tokens: 120,
+      temperature: 0.85,
+    }),
+  });
+
+  const data = await response.json();
+  if (!response.ok || data.error) {
+    throw new Error(data.error?.message || `Hugging Face request failed: ${response.status}`);
+  }
+
+  return humanizeAssistantText(outputTextFromChatCompletion(data));
+}
+
+async function requestOpenAiAssistant(input, session, message) {
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${openAiApiKey}`,
+    },
+    body: JSON.stringify({
+      model: openAiModel,
+      instructions: assistantInstructions(session, message),
+      input,
+      max_output_tokens: 120,
+    }),
+  });
+
+  const data = await response.json();
+  if (!response.ok || data.error) {
+    throw new Error(data.error?.message || `OpenAI request failed: ${response.status}`);
+  }
+
+  return humanizeAssistantText(outputTextFromResponse(data));
 }
 
 function maybe(probability) {
@@ -423,6 +553,9 @@ function localAssistantReply(message, session) {
 
   if (/\bage\b|how old/.test(text)) return [localHumanize(`im ${persona.age}`)];
   if (/\bname\b|who are you/.test(text)) return [localHumanize(`im ${persona.name}`)];
+  if (/\bgender\b|are you male|are you female|\bm or f\b|\bf or m\b/.test(text)) {
+    return [localHumanize(persona.gender === "M" ? "m" : "f")];
+  }
   if (/\bwhere.*from|country\b/.test(text)) return [localHumanize(`${persona.country}`)];
 
   if (/\bhobby|what do you do for fun|interests/.test(text)) {
@@ -545,62 +678,74 @@ async function assistantMessage(body) {
 
   const session = assistantSessionFor(conversationId);
   updateAssistantMemory(message, session);
+  ensureAssistantPersona(session);
   updateConversationState(message, session);
 
-  if (
-    !openAiApiKey ||
-    Date.now() < openAiDisabledUntil ||
-    Math.random() < localReplyChance
-  ) {
+  if (assistantProvider === "local" || Math.random() < localReplyChance) {
     return { status: 200, body: { messages: localAssistantReply(message, session) } };
   }
 
-  try {
-    const input = [
-      ...history.map((item) => ({
-        role: item.role,
-        content: item.text,
-      })),
-      { role: "user", content: message },
-    ];
+  const input = [
+    ...history.map((item) => ({
+      role: item.role,
+      content: item.text,
+    })),
+    { role: "user", content: message },
+  ];
 
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${openAiApiKey}`,
-      },
-      body: JSON.stringify({
-        model: openAiModel,
-        instructions: assistantInstructions(session, message),
-        input,
-        max_output_tokens: 120,
-      }),
-    });
+  if (shouldUseProvider("huggingface", hfToken, hfDisabledUntil)) {
+    try {
+      const messages = await requestHuggingFaceAssistant(input, session, message);
+      updateAssistantSummary(session, history, message, messages);
 
-    const data = await response.json();
-    if (!response.ok || data.error) {
-      throw new Error(data.error?.message || `OpenAI request failed: ${response.status}`);
+      return { status: 200, body: { messages } };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (/quota|billing|rate limit|429|incorrect api key|invalid api key|unauthorized|401|403/i.test(errorMessage)) {
+        hfDisabledUntil = Date.now() + OPENAI_COOLDOWN_MS;
+        console.error(
+          `Assistant Hugging Face disabled for ${OPENAI_COOLDOWN_MS / 60000} minutes: ${errorMessage}`
+        );
+      } else {
+        console.error("Assistant Hugging Face message error:", error);
+      }
+
+      if (assistantProvider === "huggingface") {
+        return { status: 200, body: { messages: localAssistantReply(message, session) } };
+      }
     }
-
-    const messages = humanizeAssistantText(outputTextFromResponse(data));
-    session.memory.summary = [...history.slice(-5).map((item) => `${item.role}: ${item.text}`), `user: ${message}`, `assistant: ${messages.join(" ")}`]
-      .join("\n")
-      .slice(-1200);
-
-    return { status: 200, body: { messages } };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (/quota|billing|rate limit|429|incorrect api key|invalid api key|401/i.test(message)) {
-      openAiDisabledUntil = Date.now() + OPENAI_COOLDOWN_MS;
-      console.error(
-        `Assistant OpenAI disabled for ${OPENAI_COOLDOWN_MS / 60000} minutes: ${message}`
-      );
-    } else {
-      console.error("Assistant message error:", error);
-    }
-    return { status: 200, body: { messages: localAssistantReply(message, session) } };
   }
+
+  if (shouldUseProvider("openai", openAiApiKey, openAiDisabledUntil)) {
+    try {
+      const messages = await requestOpenAiAssistant(input, session, message);
+      updateAssistantSummary(session, history, message, messages);
+
+      return { status: 200, body: { messages } };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (/quota|billing|rate limit|429|incorrect api key|invalid api key|401/i.test(errorMessage)) {
+        openAiDisabledUntil = Date.now() + OPENAI_COOLDOWN_MS;
+        console.error(
+          `Assistant OpenAI disabled for ${OPENAI_COOLDOWN_MS / 60000} minutes: ${errorMessage}`
+        );
+      } else {
+        console.error("Assistant OpenAI message error:", error);
+      }
+
+      return { status: 200, body: { messages: localAssistantReply(message, session) } };
+    }
+  }
+
+  if (assistantProvider === "huggingface" && !hfToken) {
+    console.warn("ASSISTANT_PROVIDER=huggingface is set but HF_TOKEN is missing.");
+  } else if (assistantProvider === "openai" && !openAiApiKey) {
+    console.warn("ASSISTANT_PROVIDER=openai is set but OPENAI_API_KEY is missing.");
+  } else if (!["auto", "huggingface", "openai", "local"].includes(assistantProvider)) {
+    console.warn(`Unknown ASSISTANT_PROVIDER "${assistantProvider}". Using local assistant replies.`);
+  }
+
+  return { status: 200, body: { messages: localAssistantReply(message, session) } };
 }
 
 async function cleanupExpired(client = pool) {

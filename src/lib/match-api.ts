@@ -28,6 +28,7 @@ export interface AssistantReplyRequest {
   conversationId: string;
   sessionId: string;
   message: string;
+  idleFollowUp?: boolean;
   history: Array<{
     role: "user" | "assistant";
     text: string;

@@ -32,7 +32,9 @@ export interface VideoSignal {
   payload: Record<string, unknown>;
 }
 
-const AI_FALLBACK_WAIT_MS = 3000;
+const AI_FALLBACK_WAIT_MS = 2000;
+const AI_IDLE_FOLLOW_UP_MIN_MS = 10000;
+const AI_IDLE_FOLLOW_UP_MAX_MS = 16000;
 
 interface AiPersona {
   startedChat: boolean;
@@ -50,7 +52,7 @@ function isDatabaseChatId(chatId: string | null): chatId is string {
 }
 
 function typingDelayFor(text: string) {
-  return Math.min(7000, Math.max(800, text.length * 45 + randomDelay(120, 700)));
+  return Math.min(1800, Math.max(350, text.length * 18 + randomDelay(100, 450)));
 }
 
 function createAiPersona(): AiPersona {
@@ -88,10 +90,13 @@ export function useChat() {
   const aiGreetingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const aiReplyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const aiTypingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const aiIdleFollowUpTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleAiIdleFollowUpRef = useRef<(() => void) | null>(null);
   const aiActiveRef = useRef(false);
   const aiConversationIdRef = useRef<string | null>(null);
   const aiMessagesRef = useRef<ChatMessage[]>([]);
   const aiPersonaRef = useRef<AiPersona>(createAiPersona());
+  const aiIdleFollowUpCountRef = useRef(0);
 
   useEffect(() => {
     statusRef.current = status;
@@ -118,6 +123,10 @@ export function useChat() {
       clearTimeout(aiTypingTimeoutRef.current);
       aiTypingTimeoutRef.current = null;
     }
+    if (aiIdleFollowUpTimeoutRef.current) {
+      clearTimeout(aiIdleFollowUpTimeoutRef.current);
+      aiIdleFollowUpTimeoutRef.current = null;
+    }
   }, []);
 
   const cleanup = useCallback(() => {
@@ -133,6 +142,7 @@ export function useChat() {
     aiActiveRef.current = false;
     aiConversationIdRef.current = null;
     aiMessagesRef.current = [];
+    aiIdleFollowUpCountRef.current = 0;
     aiPersonaRef.current = createAiPersona();
     setPeerTyping(false);
   }, [clearAiTimers]);
@@ -147,6 +157,7 @@ export function useChat() {
     aiMessagesRef.current = [...aiMessagesRef.current, message];
     setMessages((prev) => [...prev, message]);
     setPeerTyping(false);
+    scheduleAiIdleFollowUpRef.current?.();
   }, []);
 
   const scheduleAiMessage = useCallback(
@@ -168,7 +179,7 @@ export function useChat() {
     (texts: string[]) => {
       let delay = 0;
       texts.filter(Boolean).slice(0, 3).forEach((text) => {
-        delay += randomDelay(350, 900);
+        delay += randomDelay(150, 450);
         aiReplyTimeoutRef.current = setTimeout(() => {
           scheduleAiMessage(text);
         }, delay);
@@ -176,6 +187,46 @@ export function useChat() {
     },
     [scheduleAiMessage]
   );
+
+  const scheduleAiIdleFollowUp = useCallback(() => {
+    if (!aiActiveRef.current || !aiConversationIdRef.current) return;
+    if (aiIdleFollowUpCountRef.current >= 2) return;
+    if (aiIdleFollowUpTimeoutRef.current) {
+      clearTimeout(aiIdleFollowUpTimeoutRef.current);
+    }
+
+    aiIdleFollowUpTimeoutRef.current = setTimeout(() => {
+      if (!aiActiveRef.current || !aiConversationIdRef.current) return;
+      if (aiIdleFollowUpCountRef.current >= 2) return;
+      aiIdleFollowUpCountRef.current += 1;
+
+      const history = aiMessagesRef.current
+        .slice(-30)
+        .map((message) => ({
+          role: message.isMine ? ("user" as const) : ("assistant" as const),
+          text: message.text,
+        }));
+
+      void requestAssistantMessage({
+        conversationId: aiConversationIdRef.current,
+        sessionId: sessionIdRef.current,
+        message: "The user has been quiet for a short time. Send one brief, natural follow-up message.",
+        idleFollowUp: true,
+        history,
+      })
+        .then((reply) => {
+          const replyMessages = reply.messages.length > 0
+            ? reply.messages
+            : [fallbackAssistantReply()];
+          scheduleAiMessages(replyMessages.slice(0, 1));
+        })
+        .catch(() => {
+          scheduleAiMessage(fallbackAssistantReply());
+        });
+    }, randomDelay(AI_IDLE_FOLLOW_UP_MIN_MS, AI_IDLE_FOLLOW_UP_MAX_MS));
+  }, [scheduleAiMessage, scheduleAiMessages]);
+
+  scheduleAiIdleFollowUpRef.current = scheduleAiIdleFollowUp;
 
   const startAiFallback = useCallback(async () => {
     if (
@@ -189,6 +240,7 @@ export function useChat() {
     aiActiveRef.current = true;
     aiConversationIdRef.current = `assistant-${crypto.randomUUID()}`;
     aiMessagesRef.current = [];
+    aiIdleFollowUpCountRef.current = 0;
     aiPersonaRef.current = createAiPersona();
     setChatId(`ai-${crypto.randomUUID()}`);
     chatIdRef.current = null;
@@ -290,6 +342,7 @@ export function useChat() {
       clearAiTimers();
       aiActiveRef.current = false;
       aiMessagesRef.current = [];
+      aiIdleFollowUpCountRef.current = 0;
       if (wasAiFallback) {
         setMessages([]);
       }
@@ -382,6 +435,12 @@ export function useChat() {
     if (!text.trim()) return;
 
     if (aiActiveRef.current) {
+      if (aiIdleFollowUpTimeoutRef.current) {
+        clearTimeout(aiIdleFollowUpTimeoutRef.current);
+        aiIdleFollowUpTimeoutRef.current = null;
+      }
+      aiIdleFollowUpCountRef.current = 0;
+
       const userMessage = {
         id: crypto.randomUUID(),
         text,
@@ -404,6 +463,7 @@ export function useChat() {
         }));
       const conversationId = aiConversationIdRef.current || sessionIdRef.current;
 
+      aiMessagesRef.current = [...aiMessagesRef.current, userMessage];
       setMessages((prev) => [...prev, userMessage]);
       aiTypingTimeoutRef.current = setTimeout(() => {
         void requestAssistantMessage({
