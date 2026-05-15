@@ -149,10 +149,26 @@ function jsonResponse(req, res, status, body) {
     "Content-Type": "application/json",
     "Access-Control-Allow-Origin": corsOriginFor(req),
     "Vary": "Origin",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
   });
   res.end(JSON.stringify(body));
+}
+
+async function ensureAuthSchema() {
+  await pool.query(`
+    ALTER TABLE app_users
+      ADD COLUMN IF NOT EXISTS password_hash text,
+      ADD COLUMN IF NOT EXISTS email_verified boolean NOT NULL DEFAULT false,
+      ADD COLUMN IF NOT EXISTS verification_token text,
+      ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now()
+  `);
+
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS app_users_verification_token_key
+      ON app_users(verification_token)
+      WHERE verification_token IS NOT NULL
+  `);
 }
 
 function normalizeIceServer(server) {
@@ -1209,6 +1225,7 @@ async function registerUser(body) {
       body: {
         user: publicUser(rows[0]),
         verificationEmailSent: emailResult.sent,
+        ...(emailResult.verificationUrl ? { verificationUrl: emailResult.verificationUrl } : {}),
       },
     };
   } catch (error) {
@@ -1427,6 +1444,74 @@ async function createFriendRequest(body, req) {
   };
 }
 
+function friendRequestResponse(row) {
+  return {
+    id: row.id,
+    status: row.status,
+    createdAt: row.created_at,
+    sender: {
+      id: row.sender_id,
+      username: row.sender_username,
+    },
+  };
+}
+
+async function friendshipExists(client, userA, userB) {
+  const users = [userA, userB].sort();
+  const { rows } = await client.query(
+    "SELECT 1 FROM friendships WHERE user_a = $1 AND user_b = $2 LIMIT 1",
+    users
+  );
+  return rows.length > 0;
+}
+
+async function receiveFriendRequest(body, req) {
+  const user = await currentUser(req);
+  if (!user) return { status: 401, body: { error: "Login required" } };
+  if (!user.email_verified) return { status: 403, body: { error: "Verify your email first" } };
+
+  const requestId = normalizeUuid(body.requestId);
+  if (!requestId) return { status: 400, body: { error: "Request id required" } };
+
+  const { rows: requestRows } = await pool.query(
+    `SELECT id, sender_id
+     FROM friend_requests
+     WHERE id = $1
+       AND status = 'pending'
+       AND sender_id <> $2
+       AND (receiver_id IS NULL OR receiver_id = $2)
+     LIMIT 1`,
+    [requestId, user.id]
+  );
+  const request = requestRows[0];
+
+  if (!request) {
+    return { status: 404, body: { error: "Friend request not found" } };
+  }
+
+  if (await friendshipExists(pool, request.sender_id, user.id)) {
+    await pool.query(
+      "UPDATE friend_requests SET status = 'rejected', responded_at = NOW() WHERE id = $1 AND status = 'pending'",
+      [requestId]
+    );
+    return { status: 200, body: { request: null, ignored: true } };
+  }
+
+  const { rows } = await pool.query(
+    `UPDATE friend_requests
+     SET receiver_id = COALESCE(receiver_id, $2)
+     WHERE id = $1
+       AND status = 'pending'
+       AND sender_id <> $2
+       AND (receiver_id IS NULL OR receiver_id = $2)
+     RETURNING id, sender_id, status, created_at,
+       (SELECT username FROM app_users WHERE app_users.id = friend_requests.sender_id) AS sender_username`,
+    [requestId, user.id]
+  );
+
+  return { status: 200, body: { request: friendRequestResponse(rows[0]) } };
+}
+
 async function respondFriendRequest(body, req) {
   const user = await currentUser(req);
   if (!user) return { status: 401, body: { error: "Login required" } };
@@ -1440,7 +1525,10 @@ async function respondFriendRequest(body, req) {
     const { rows } = await client.query(
       `UPDATE friend_requests
        SET receiver_id = COALESCE(receiver_id, $2), status = $3, responded_at = NOW()
-       WHERE id = $1 AND status = 'pending'
+       WHERE id = $1
+         AND status = 'pending'
+         AND sender_id <> $2
+         AND (receiver_id IS NULL OR receiver_id = $2)
        RETURNING *`,
       [requestId, user.id, action]
     );
@@ -1453,6 +1541,14 @@ async function respondFriendRequest(body, req) {
       await client.query("ROLLBACK");
       return { status: 400, body: { error: "You cannot accept your own friend request" } };
     }
+    if (await friendshipExists(client, request.sender_id, user.id)) {
+      await client.query(
+        "UPDATE friend_requests SET status = 'rejected', responded_at = NOW() WHERE id = $1",
+        [requestId]
+      );
+      await client.query("COMMIT");
+      return { status: 409, body: { error: "You are already friends" } };
+    }
     if (action === "accepted") {
       const users = [request.sender_id, user.id].sort();
       await client.query(
@@ -1460,6 +1556,17 @@ async function respondFriendRequest(body, req) {
          VALUES ($1, $2)
          ON CONFLICT (user_a, user_b) DO NOTHING`,
         users
+      );
+      await client.query(
+        `UPDATE friend_requests
+         SET status = 'rejected', responded_at = NOW()
+         WHERE status = 'pending'
+           AND id <> $1
+           AND (
+             (sender_id = $2 AND receiver_id = $3)
+             OR (sender_id = $3 AND receiver_id = $2)
+           )`,
+        [requestId, request.sender_id, user.id]
       );
     }
     await client.query("COMMIT");
@@ -1470,6 +1577,33 @@ async function respondFriendRequest(body, req) {
   } finally {
     client.release();
   }
+}
+
+async function listFriendRequests(_body, req) {
+  const user = await currentUser(req);
+  if (!user) return { status: 401, body: { error: "Login required" } };
+
+  const { rows } = await pool.query(
+    `SELECT friend_requests.id,
+       friend_requests.sender_id,
+       friend_requests.status,
+       friend_requests.created_at,
+       app_users.username AS sender_username
+     FROM friend_requests
+     JOIN app_users ON app_users.id = friend_requests.sender_id
+     WHERE friend_requests.receiver_id = $1
+       AND friend_requests.status = 'pending'
+       AND NOT EXISTS (
+         SELECT 1
+         FROM friendships
+         WHERE (friendships.user_a = friend_requests.sender_id AND friendships.user_b = $1)
+            OR (friendships.user_a = $1 AND friendships.user_b = friend_requests.sender_id)
+       )
+     ORDER BY friend_requests.created_at DESC`,
+    [user.id]
+  );
+
+  return { status: 200, body: { requests: rows.map(friendRequestResponse) } };
 }
 
 async function listFriends(_body, req) {
@@ -1522,7 +1656,9 @@ const handlers = {
   "/api/rooms/join": joinRoom,
   "/api/rooms/delete": deleteRoom,
   "/api/friends/request": createFriendRequest,
+  "/api/friends/receive": receiveFriendRequest,
   "/api/friends/respond": respondFriendRequest,
+  "/api/friends/requests": listFriendRequests,
   "/api/friends/list": listFriends,
   "/api/friends/chat": friendChat,
 };
@@ -1573,6 +1709,13 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(port, () => {
-  console.log(`Supabase chat API listening on http://localhost:${port}`);
-});
+ensureAuthSchema()
+  .then(() => {
+    server.listen(port, () => {
+      console.log(`Supabase chat API listening on http://localhost:${port}`);
+    });
+  })
+  .catch((error) => {
+    console.error("Could not prepare auth schema:", error);
+    process.exit(1);
+  });

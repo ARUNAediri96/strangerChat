@@ -21,6 +21,15 @@ function pageFromHash() {
   return hash || "home";
 }
 
+function verificationTokenFromLocation() {
+  const hash = window.location.hash.replace(/^#\/?/, "");
+  if (hash.startsWith("verify=")) return decodeURIComponent(hash.slice("verify=".length));
+
+  const hashParams = new URLSearchParams(hash.includes("?") ? hash.slice(hash.indexOf("?") + 1) : hash);
+  const searchParams = new URLSearchParams(window.location.search);
+  return hashParams.get("verify") || hashParams.get("token") || searchParams.get("verify") || searchParams.get("token");
+}
+
 function App() {
   const [page, setPage] = useState(pageFromHash);
   const [authToken, setAuthToken] = useState(() => localStorage.getItem("auth_token") || "");
@@ -45,23 +54,22 @@ function App() {
     skipChat,
     leaveCurrentChat,
     reportAndLeave,
-  } = useChat();
+  } = useChat(authToken);
 
   const handleVerificationHash = useCallback(() => {
-    const hash = window.location.hash.replace(/^#\/?/, "");
-    if (!hash.startsWith("verify=")) return false;
+    const token = verificationTokenFromLocation();
+    if (!token) return false;
 
-    const token = decodeURIComponent(hash.slice("verify=".length));
     void verifyAccountEmail(token)
       .then((data) => {
         localStorage.setItem("auth_token", data.token);
         setAuthToken(data.token);
         setCurrentUser(data.user);
-        window.location.hash = "home";
+        window.history.replaceState(null, "", `${window.location.pathname}#home`);
         alert("Email verified. You are logged in now.");
       })
       .catch((error) => {
-        window.location.hash = "home";
+        window.history.replaceState(null, "", `${window.location.pathname}#home`);
         alert(error instanceof Error ? error.message : "Verification failed. Please login normally.");
       });
 

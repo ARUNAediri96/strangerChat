@@ -7,6 +7,7 @@ import {
   reportChat,
   createChatChannel,
   createFriendRequest,
+  recordIncomingFriendRequest,
   requestAssistantMessage,
   respondFriendRequest,
   type ChatMode,
@@ -88,7 +89,7 @@ function fallbackAssistantReply() {
   return "hmm";
 }
 
-export function useChat() {
+export function useChat(authToken = "") {
   const [status, setStatus] = useState<ChatStatus>("idle");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [matchedFilters, setMatchedFilters] = useState<string[]>([]);
@@ -357,6 +358,20 @@ export function useChat() {
         const payload = event.payload as unknown as FriendRequestPayload & { session_id?: string };
         if (!payload || payload.session_id === sessionIdRef.current) return;
         if (!payload.id || !payload.sender?.username) return;
+        if (authToken) {
+          void recordIncomingFriendRequest(payload.id, authToken)
+            .then((data) => {
+              if (!data.request) return;
+              setIncomingFriendRequest({
+                id: data.request.id,
+                senderUsername: data.request.sender.username,
+              });
+            })
+            .catch((error) => {
+              console.error("Could not save incoming friend request:", error);
+            });
+          return;
+        }
         setIncomingFriendRequest({
           id: payload.id,
           senderUsername: payload.sender.username,
@@ -379,7 +394,7 @@ export function useChat() {
 
       channel.subscribe();
     },
-    [cleanup]
+    [authToken, cleanup]
   );
 
   const applyMatch = useCallback(
@@ -617,7 +632,7 @@ export function useChat() {
   const sendFriendRequest = useCallback(async (authToken: string) => {
     if (!authToken) throw new Error("Login required for friend requests");
     if (!channelRef.current || !chatIdRef.current) {
-      throw new Error("Friend requests are available in live stranger chats");
+      throw new Error("Friend requests are not available in this chat");
     }
     const { request } = await createFriendRequest(chatIdRef.current, authToken);
     await channelRef.current.send({

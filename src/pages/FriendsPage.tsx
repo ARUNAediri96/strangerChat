@@ -1,10 +1,13 @@
-import { useEffect, useRef, useState } from "react";
-import { Send, Users } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Check, Send, UserPlus, Users, X } from "lucide-react";
 import {
   createChatChannel,
+  listFriendRequests,
   listFriends,
   openFriendChat,
+  respondFriendRequest,
   type AppUser,
+  type FriendRequestPayload,
 } from "../lib/match-api";
 
 interface FriendsPageProps {
@@ -21,34 +24,64 @@ interface FriendMessage {
 
 export default function FriendsPage({ authToken, currentUser }: FriendsPageProps) {
   const [friends, setFriends] = useState<AppUser[]>([]);
+  const [requests, setRequests] = useState<FriendRequestPayload[]>([]);
   const [activeFriend, setActiveFriend] = useState<AppUser | null>(null);
   const [messages, setMessages] = useState<FriendMessage[]>([]);
   const [input, setInput] = useState("");
   const [notice, setNotice] = useState("");
   const sessionIdRef = useRef(crypto.randomUUID());
   const channelRef = useRef<ReturnType<typeof createChatChannel> | null>(null);
+  const seenMessageIdsRef = useRef(new Set<string>());
+
+  const loadFriendData = useCallback(async () => {
+    const [friendsData, requestsData] = await Promise.all([
+      listFriends(authToken),
+      listFriendRequests(authToken),
+    ]);
+    setFriends(friendsData.friends);
+    setRequests(requestsData.requests);
+  }, [authToken]);
 
   useEffect(() => {
     if (!authToken) return;
-    void listFriends(authToken)
-      .then((data) => setFriends(data.friends))
+    void loadFriendData()
       .catch((error) => setNotice(error instanceof Error ? error.message : "Login required"));
     return () => channelRef.current?.unsubscribe();
-  }, [authToken]);
+  }, [authToken, loadFriendData]);
+
+  async function respondToRequest(requestId: string, action: "accept" | "reject") {
+    setNotice("");
+    try {
+      await respondFriendRequest(requestId, action, authToken);
+      setRequests((prev) => prev.filter((request) => request.id !== requestId));
+      if (action === "accept") {
+        await loadFriendData();
+        setNotice("Friend request accepted.");
+      } else {
+        setNotice("Friend request declined.");
+      }
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not update request");
+    }
+  }
 
   async function selectFriend(friend: AppUser) {
     if (!currentUser) return;
     const data = await openFriendChat(friend.id, authToken);
     channelRef.current?.unsubscribe();
+    seenMessageIdsRef.current.clear();
     const channel = createChatChannel(data.chatId, sessionIdRef.current);
     channelRef.current = channel;
     channel.on("broadcast", { event: "friend-message" }, (event) => {
       const payload = event.payload;
       if (!payload?.text) return;
+      const messageId = String(payload.message_id || payload.__event_id || crypto.randomUUID());
+      if (seenMessageIdsRef.current.has(messageId)) return;
+      seenMessageIdsRef.current.add(messageId);
       setMessages((prev) => [
         ...prev,
         {
-          id: crypto.randomUUID(),
+          id: messageId,
           text: String(payload.text),
           username: String(payload.username || "Friend"),
           isMine: payload.session_id === sessionIdRef.current,
@@ -67,6 +100,7 @@ export default function FriendsPage({ authToken, currentUser }: FriendsPageProps
       event: "friend-message",
       payload: {
         session_id: sessionIdRef.current,
+        message_id: crypto.randomUUID(),
         username: currentUser.username,
         text: input.trim(),
       },
@@ -83,6 +117,41 @@ export default function FriendsPage({ authToken, currentUser }: FriendsPageProps
           </div>
           {!currentUser && <div className="text-sm text-gray-400">Login to use friend chat.</div>}
           {notice && <div className="mb-3 rounded-lg bg-yellow-400/10 p-3 text-sm text-yellow-100">{notice}</div>}
+          {currentUser && (
+            <div className="mb-5 border-b border-white/10 pb-5">
+              <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-200">
+                <UserPlus size={16} /> Requests
+              </div>
+              <div className="space-y-2">
+                {requests.map((request) => (
+                  <div key={request.id} className="rounded-lg bg-white/[0.04] p-3">
+                    <div className="text-sm font-medium text-white">{request.sender.username}</div>
+                    <div className="mt-3 flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => respondToRequest(request.id, "accept")}
+                        className="flex h-9 flex-1 items-center justify-center rounded-lg bg-emerald-500 text-white hover:bg-emerald-400"
+                        title="Accept request"
+                      >
+                        <Check size={16} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => respondToRequest(request.id, "reject")}
+                        className="flex h-9 flex-1 items-center justify-center rounded-lg bg-white/10 text-gray-200 hover:bg-white/15"
+                        title="Decline request"
+                      >
+                        <X size={16} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                {requests.length === 0 && (
+                  <div className="text-sm text-gray-500">No pending requests.</div>
+                )}
+              </div>
+            </div>
+          )}
           <div className="space-y-2">
             {friends.map((friend) => (
               <button

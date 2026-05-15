@@ -218,12 +218,20 @@ export async function createFriendRequest(chatId: string, token: string) {
   return apiCall<{ request: FriendRequestPayload }>("/api/friends/request", { chatId }, token);
 }
 
+export async function recordIncomingFriendRequest(requestId: string, token: string) {
+  return apiCall<{ request: FriendRequestPayload | null; ignored?: boolean }>("/api/friends/receive", { requestId }, token);
+}
+
 export async function respondFriendRequest(requestId: string, action: "accept" | "reject", token: string) {
   return apiCall<{ request: { id: string; status: string } }>(
     "/api/friends/respond",
     { requestId, action },
     token
   );
+}
+
+export async function listFriendRequests(token: string) {
+  return apiCall<{ requests: FriendRequestPayload[] }>("/api/friends/requests", {}, token);
 }
 
 export async function listFriends(token: string) {
@@ -239,9 +247,11 @@ export function createChatChannel(chatId: string, sessionIdForPolling?: string) 
   let pollId: ReturnType<typeof setInterval> | null = null;
   let lastEventId = 0;
   let closed = false;
+  let polling = false;
 
   async function poll() {
-    if (closed) return;
+    if (closed || polling) return;
+    polling = true;
 
     try {
       const params = new URLSearchParams({
@@ -250,12 +260,14 @@ export function createChatChannel(chatId: string, sessionIdForPolling?: string) 
       });
       if (sessionIdForPolling) params.set("sessionId", sessionIdForPolling);
       const data = await apiGet<EventResponse>(`/api/chat/events?${params}`);
+      if (closed) return;
 
       for (const item of data.events) {
         lastEventId = Math.max(lastEventId, item.id);
         const eventHandlers = handlers.get(item.event) || [];
         const payload = {
           ...item.payload,
+          __event_id: item.id,
           session_id: item.payload.session_id || item.sessionId,
         };
 
@@ -265,6 +277,8 @@ export function createChatChannel(chatId: string, sessionIdForPolling?: string) 
       }
     } catch (err) {
       console.error("Chat event poll error:", err);
+    } finally {
+      polling = false;
     }
   }
 
@@ -291,6 +305,7 @@ export function createChatChannel(chatId: string, sessionIdForPolling?: string) 
     },
 
     subscribe() {
+      if (pollId) return this;
       void poll();
       pollId = setInterval(() => {
         void poll();
