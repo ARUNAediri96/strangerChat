@@ -1,0 +1,16 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "redirects": [
+    {
+      "source": "/(.*)",
+      "has": [
+        {
+          "type": "host",
+          "value": "stranger-chat-pink.vercel.app"
+        }
+      ],
+      "destination": "https://chatstranger.online/$1",
+      "permanent": true
+    }
+  ]
+}
