@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CircleUser, MessageCircle, Shield, UserRound, Video, Zap, Eye, X } from "lucide-react";
+import { CircleUser, MessageCircle, Shield, UserRound, Video, Zap, Eye, X, DoorOpen } from "lucide-react";
 import FilterInput from "../components/FilterInput";
 import SearchAnimation from "../components/SearchAnimation";
 import type { ChatMode, ChatStatus, UserGender } from "../lib/use-chat";
@@ -9,12 +9,14 @@ interface HomePageProps {
   matchedFilters: string[];
   onStartChat: (filters: string[], mode: ChatMode, gender: UserGender) => void;
   onCancelSearch: () => void;
+  onNavigate: (page: string) => void;
 }
 
 export default function HomePage({
   status,
   onStartChat,
   onCancelSearch,
+  onNavigate,
 }: HomePageProps) {
   const [filters, setFilters] = useState<string[]>([]);
   const [mode, setMode] = useState<ChatMode>("chat");
@@ -41,7 +43,8 @@ export default function HomePage({
         }}
       />
 
-      <div className="relative z-10 w-full max-w-lg">
+      <div className="relative z-10 flex w-full max-w-6xl flex-col items-center gap-6 py-10">
+        <div className="w-full max-w-lg">
         {/* Logo */}
         <div className="text-center mb-10">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500/20 to-teal-500/20 border border-emerald-500/20 mb-5 backdrop-blur-sm">
@@ -166,6 +169,13 @@ export default function HomePage({
               >
                 {mode === "video" ? "Start Video Call" : "Start Chat"}
               </button>
+              <button
+                onClick={() => onNavigate("rooms")}
+                className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-white/[0.1] bg-white/[0.04] py-3 text-sm font-semibold text-gray-200 transition hover:bg-white/[0.08]"
+              >
+                <DoorOpen size={17} />
+                Public and Private Rooms
+              </button>
             </>
           )}
         </div>
@@ -183,6 +193,23 @@ export default function HomePage({
           <div className="flex flex-col items-center gap-2 p-3 bg-white/[0.02] border border-white/[0.04] rounded-xl">
             <Zap size={16} className="text-cyan-400" />
             <span className="text-xs text-gray-500">Ephemeral</span>
+          </div>
+        </div>
+      </div>
+        <div className="w-full rounded-2xl border border-white/[0.06] bg-white/[0.03] p-6 backdrop-blur-xl">
+          <div className="grid gap-5 lg:grid-cols-[1fr_2fr] lg:items-center">
+            <div>
+              <h2 className="text-2xl font-semibold text-white">Anonymous chat plus friends</h2>
+              <p className="mt-3 text-sm leading-6 text-gray-400">
+                Use random chat, anonymous chat, and video chat with strangers without an account. Register only when you
+                want friend requests and known-friend conversations.
+              </p>
+            </div>
+            <div className="grid gap-3 text-sm text-gray-300 md:grid-cols-3">
+              <div className="rounded-xl bg-white/[0.04] p-4">Alternative for Omegle with filters and safer controls.</div>
+              <div className="rounded-xl bg-white/[0.04] p-4">Create public online chat rooms or private token rooms.</div>
+              <div className="rounded-xl bg-white/[0.04] p-4">Verified accounts can add friends from anonymous chats.</div>
+            </div>
           </div>
         </div>
       </div>

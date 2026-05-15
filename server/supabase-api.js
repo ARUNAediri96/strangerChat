@@ -1,6 +1,6 @@
 import "dotenv/config";
 import http from "node:http";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 import pg from "pg";
 
 const { Pool } = pg;
@@ -30,6 +30,9 @@ const turnUsername = process.env.TURN_USERNAME || "";
 const turnCredential = process.env.TURN_CREDENTIAL || "";
 const meteredDomain = process.env.METERED_DOMAIN || "";
 const meteredSecretKey = process.env.METERED_SECRET_KEY || "";
+const publicSiteUrl = (process.env.PUBLIC_SITE_URL || process.env.SITE_URL || "http://localhost:5173").replace(/\/+$/g, "");
+const resendApiKey = process.env.RESEND_API_KEY || "";
+const emailFrom = process.env.EMAIL_FROM || "support@chatstranger.online";
 const ASSISTANT_REPLY_DELAY_MIN_MS = 2000;
 const ASSISTANT_REPLY_DELAY_MAX_MS = 3000;
 const ASSISTANT_PROVIDER_COOLDOWN_MS = 5 * 60 * 1000;
@@ -223,6 +226,62 @@ async function readJson(req) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
+async function currentUser(req) {
+  const token = bearerToken(req.headers);
+  if (!token) return null;
+
+  const { rows } = await pool.query(
+    `SELECT app_users.*
+     FROM auth_sessions
+     JOIN app_users ON app_users.id = auth_sessions.user_id
+     WHERE auth_sessions.token = $1 AND auth_sessions.expires_at > NOW()
+     LIMIT 1`,
+    [token]
+  );
+
+  return rows[0] || null;
+}
+
+async function sendVerificationEmail(email, username, token) {
+  const verificationUrl = `${publicSiteUrl}/#verify=${encodeURIComponent(token)}`;
+  const subject = "Verify your StrangerChat account";
+  const html = `
+    <div style="font-family:Arial,sans-serif;line-height:1.5;color:#111">
+      <h2>Welcome to StrangerChat, ${username}</h2>
+      <p>Verify your email to activate friend requests and known-friend chats.</p>
+      <p><a href="${verificationUrl}" style="background:#10b981;color:white;padding:12px 16px;border-radius:8px;text-decoration:none">Verify email</a></p>
+      <p>Or paste this link into your browser: ${verificationUrl}</p>
+    </div>
+  `;
+
+  if (!resendApiKey) {
+    console.info(`Email delivery is in dev mode. Set RESEND_API_KEY for real verification emails. Dev link: ${verificationUrl}`);
+    return { sent: false, verificationUrl };
+  }
+
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${resendApiKey}`,
+    },
+    body: JSON.stringify({
+      from: emailFrom,
+      to: email,
+      subject,
+      html,
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    console.error("Verification email failed:", text);
+    return { sent: false, verificationUrl };
+  }
+
+  return { sent: true };
+}
+
 function normalizeFilters(filters) {
   return Array.isArray(filters)
     ? filters.map((filter) => String(filter).trim()).filter(Boolean)
@@ -232,6 +291,49 @@ function normalizeFilters(filters) {
 function normalizeUuid(value) {
   const id = String(value || "");
   return id || null;
+}
+
+function normalizeUsername(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, 32);
+}
+
+function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase().slice(0, 255);
+}
+
+function randomToken(bytes = 24) {
+  return randomBytes(bytes).toString("base64url");
+}
+
+function hashPassword(password, salt = randomToken(16)) {
+  const hash = scryptSync(String(password), salt, 64).toString("base64url");
+  return `${salt}:${hash}`;
+}
+
+function verifyPassword(password, storedHash) {
+  const [salt, hash] = String(storedHash || "").split(":");
+  if (!salt || !hash) return false;
+  const actual = Buffer.from(hash, "base64url");
+  const expected = scryptSync(String(password), salt, 64);
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+function bearerToken(headers) {
+  const header = String(headers?.authorization || "");
+  return header.toLowerCase().startsWith("bearer ") ? header.slice(7).trim() : "";
+}
+
+function publicUser(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    email: row.email,
+    username: row.username,
+    emailVerified: Boolean(row.email_verified),
+  };
 }
 
 function normalizeMode(value) {
@@ -841,6 +943,7 @@ async function assistantMessage(body) {
 
 async function cleanupExpired(client = pool) {
   await client.query("DELETE FROM active_chats WHERE expires_at < NOW()");
+  await client.query("DELETE FROM meeting_rooms WHERE expires_at < NOW()");
   await client.query("DELETE FROM waiting_pool WHERE created_at < NOW() - INTERVAL '30 minutes'");
   await client.query("DELETE FROM chat_events WHERE created_at < NOW() - INTERVAL '2 hours'");
 }
@@ -1015,6 +1118,11 @@ async function addEvent(body) {
     return { status: 400, body: { error: "chatId, sessionId, and event required" } };
   }
 
+  const privateRoomAccess = await roomAccessStatus(chatId, sessionId);
+  if (!privateRoomAccess.allowed) {
+    return { status: 403, body: { error: "You are not a member of this private room" } };
+  }
+
   await pool.query(
     "INSERT INTO chat_events (chat_id, session_id, event_name, payload) VALUES ($1, $2, $3, $4)",
     [chatId, sessionId, event, JSON.stringify(payload)]
@@ -1025,8 +1133,14 @@ async function addEvent(body) {
 
 async function getEvents(url) {
   const chatId = normalizeUuid(url.searchParams.get("chatId"));
+  const sessionId = normalizeUuid(url.searchParams.get("sessionId"));
   const since = Number(url.searchParams.get("since") || 0);
   if (!chatId) return { status: 400, body: { error: "chatId required" } };
+
+  const privateRoomAccess = await roomAccessStatus(chatId, sessionId);
+  if (!privateRoomAccess.allowed) {
+    return { status: 403, body: { error: "You are not a member of this private room" } };
+  }
 
   const { rows } = await pool.query(
     `SELECT id, session_id, event_name, payload
@@ -1050,6 +1164,348 @@ async function getEvents(url) {
   };
 }
 
+async function roomAccessStatus(roomId, sessionId) {
+  const { rows } = await pool.query(
+    "SELECT visibility FROM meeting_rooms WHERE id = $1 AND expires_at > NOW() LIMIT 1",
+    [roomId]
+  );
+  const room = rows[0];
+  if (!room || room.visibility !== "private") return { allowed: true };
+  if (!sessionId) return { allowed: false };
+
+  const member = await pool.query(
+    "SELECT 1 FROM room_members WHERE room_id = $1 AND session_id = $2 LIMIT 1",
+    [roomId, sessionId]
+  );
+  return { allowed: member.rows.length > 0 };
+}
+
+async function registerUser(body) {
+  const email = normalizeEmail(body.email);
+  const username = normalizeUsername(body.username);
+  const password = String(body.password || "");
+
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return { status: 400, body: { error: "Valid email required" } };
+  }
+  if (!username || username.length < 2) {
+    return { status: 400, body: { error: "Username must be at least 2 characters" } };
+  }
+  if (password.length < 8) {
+    return { status: 400, body: { error: "Password must be at least 8 characters" } };
+  }
+
+  const verificationToken = randomToken();
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO app_users (email, username, password_hash, verification_token)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, email, username, email_verified`,
+      [email, username, hashPassword(password), verificationToken]
+    );
+    const emailResult = await sendVerificationEmail(email, username, verificationToken);
+    return {
+      status: 200,
+      body: {
+        user: publicUser(rows[0]),
+        verificationEmailSent: emailResult.sent,
+      },
+    };
+  } catch (error) {
+    if (error?.constraint === "app_users_email_key" || /app_users_email_key/i.test(String(error))) {
+      return { status: 409, body: { error: "Email already registered" } };
+    }
+    if (error?.constraint === "app_users_verification_token_key" || /verification_token/i.test(String(error))) {
+      return { status: 500, body: { error: "Could not create verification token. Please try again." } };
+    }
+    throw error;
+  }
+}
+
+async function loginUser(body) {
+  const email = normalizeEmail(body.email);
+  const password = String(body.password || "");
+  const { rows } = await pool.query("SELECT * FROM app_users WHERE email = $1 LIMIT 1", [email]);
+  const user = rows[0];
+  if (!user || !verifyPassword(password, user.password_hash)) {
+    return { status: 401, body: { error: "Invalid email or password" } };
+  }
+  if (!user.email_verified) {
+    return { status: 403, body: { error: "Please verify your email before logging in" } };
+  }
+
+  const token = randomToken(32);
+  await pool.query("INSERT INTO auth_sessions (token, user_id) VALUES ($1, $2)", [token, user.id]);
+  return { status: 200, body: { token, user: publicUser(user) } };
+}
+
+async function verifyEmail(body) {
+  const verificationToken = String(body.token || "").trim();
+  if (!verificationToken) return { status: 400, body: { error: "Verification token required" } };
+
+  const { rows } = await pool.query(
+    `UPDATE app_users
+     SET email_verified = true, verification_token = NULL
+     WHERE verification_token = $1
+     RETURNING id, email, username, email_verified`,
+    [verificationToken]
+  );
+  if (!rows[0]) {
+    return {
+      status: 400,
+      body: { error: "This verification link was already used or expired. Please login with your email and password." },
+    };
+  }
+  const sessionToken = randomToken(32);
+  await pool.query("INSERT INTO auth_sessions (token, user_id) VALUES ($1, $2)", [
+    sessionToken,
+    rows[0].id,
+  ]);
+  return { status: 200, body: { token: sessionToken, user: publicUser(rows[0]) } };
+}
+
+async function changePassword(body, req) {
+  const user = await currentUser(req);
+  if (!user) return { status: 401, body: { error: "Login required" } };
+
+  const currentPassword = String(body.currentPassword || "");
+  const newPassword = String(body.newPassword || "");
+  if (!verifyPassword(currentPassword, user.password_hash)) {
+    return { status: 401, body: { error: "Current password is incorrect" } };
+  }
+  if (newPassword.length < 8) {
+    return { status: 400, body: { error: "New password must be at least 8 characters" } };
+  }
+
+  await pool.query("UPDATE app_users SET password_hash = $1 WHERE id = $2", [
+    hashPassword(newPassword),
+    user.id,
+  ]);
+  return { status: 200, body: { success: true } };
+}
+
+async function me(_body, req) {
+  const user = await currentUser(req);
+  return { status: 200, body: { user: publicUser(user) } };
+}
+
+async function createRoom(body) {
+  const name = String(body.name || "").trim().slice(0, 80);
+  const visibility = body.visibility === "private" ? "private" : "public";
+  const username = normalizeUsername(body.username);
+  const ownerSessionId = normalizeUuid(body.sessionId);
+  const durationDays = Math.max(1, Math.min(3, Number(body.durationDays || 1)));
+  if (!name) return { status: 400, body: { error: "Room name required" } };
+  if (!username) return { status: 400, body: { error: "Username required" } };
+  if (!ownerSessionId) return { status: 400, body: { error: "Session id required" } };
+
+  const joinToken = visibility === "private" ? randomToken(30) : null;
+  const { rows } = await pool.query(
+    `INSERT INTO meeting_rooms
+       (name, visibility, join_token, owner_username, owner_session_id, duration_days, expires_at)
+     VALUES ($1, $2, $3, $4, $5, $6, NOW() + ($6::int * INTERVAL '1 day'))
+     RETURNING id, name, visibility, join_token, owner_username, owner_session_id, duration_days, created_at, expires_at`,
+    [name, visibility, joinToken, username, ownerSessionId, durationDays]
+  );
+  await pool.query(
+    `INSERT INTO room_members (room_id, session_id, username)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (room_id, session_id) DO UPDATE SET username = EXCLUDED.username, joined_at = NOW()`,
+    [rows[0].id, ownerSessionId, username]
+  );
+  return { status: 200, body: { room: roomResponse(rows[0]) } };
+}
+
+function roomResponse(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    visibility: row.visibility,
+    joinToken: row.join_token,
+    ownerUsername: row.owner_username,
+    ownerSessionId: row.owner_session_id,
+    durationDays: row.duration_days,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+  };
+}
+
+async function listVisibleRooms(url) {
+  const sessionId = normalizeUuid(url.searchParams.get("sessionId"));
+  await pool.query("DELETE FROM meeting_rooms WHERE expires_at < NOW()");
+  const { rows } = await pool.query(
+    `SELECT meeting_rooms.*, COUNT(room_members.id)::int AS member_count
+     FROM meeting_rooms
+     LEFT JOIN room_members ON room_members.room_id = meeting_rooms.id
+     WHERE expires_at > NOW()
+       AND (
+         visibility = 'public'
+         OR EXISTS (
+           SELECT 1
+           FROM room_members private_membership
+           WHERE private_membership.room_id = meeting_rooms.id
+             AND private_membership.session_id = $1
+         )
+       )
+     GROUP BY meeting_rooms.id
+     ORDER BY meeting_rooms.created_at DESC
+     LIMIT 50`,
+    [sessionId]
+  );
+  return {
+    status: 200,
+    body: {
+      rooms: rows.map((row) => ({
+        ...roomResponse(row),
+        memberCount: row.member_count || 0,
+      })),
+    },
+  };
+}
+
+async function joinRoom(body) {
+  const username = normalizeUsername(body.username);
+  const sessionId = normalizeUuid(body.sessionId);
+  const roomId = body.roomId ? normalizeUuid(body.roomId) : null;
+  const token = String(body.token || "").trim();
+  if (!username) return { status: 400, body: { error: "Username required" } };
+  if (!sessionId) return { status: 400, body: { error: "Session id required" } };
+
+  const query = roomId
+    ? ["SELECT * FROM meeting_rooms WHERE id = $1 AND expires_at > NOW() LIMIT 1", [roomId]]
+    : ["SELECT * FROM meeting_rooms WHERE join_token = $1 AND visibility = 'private' AND expires_at > NOW() LIMIT 1", [token]];
+  const { rows } = await pool.query(query[0], query[1]);
+  const room = rows[0];
+  if (!room) return { status: 404, body: { error: "Room not found or token is incorrect" } };
+
+  await pool.query(
+    `INSERT INTO room_members (room_id, session_id, username)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (room_id, session_id) DO UPDATE SET username = EXCLUDED.username, joined_at = NOW()`,
+    [room.id, sessionId, username]
+  );
+  return { status: 200, body: { room: roomResponse(room), username } };
+}
+
+async function deleteRoom(body) {
+  const roomId = normalizeUuid(body.roomId);
+  const sessionId = normalizeUuid(body.sessionId);
+  if (!roomId || !sessionId) return { status: 400, body: { error: "Room id and session id required" } };
+
+  const { rowCount } = await pool.query(
+    "DELETE FROM meeting_rooms WHERE id = $1 AND owner_session_id = $2",
+    [roomId, sessionId]
+  );
+  if (rowCount === 0) return { status: 403, body: { error: "Only the room creator can delete this room" } };
+
+  await pool.query("DELETE FROM chat_events WHERE chat_id = $1", [roomId]);
+  return { status: 200, body: { success: true } };
+}
+
+async function createFriendRequest(body, req) {
+  const user = await currentUser(req);
+  if (!user) return { status: 401, body: { error: "Login required for friend requests" } };
+  if (!user.email_verified) return { status: 403, body: { error: "Verify your email first" } };
+
+  const chatId = String(body.chatId || "").slice(0, 120);
+  const { rows } = await pool.query(
+    `INSERT INTO friend_requests (sender_id, chat_id)
+     VALUES ($1, $2)
+     RETURNING id, status, created_at`,
+    [user.id, chatId]
+  );
+  return {
+    status: 200,
+    body: {
+      request: {
+        id: rows[0].id,
+        status: rows[0].status,
+        createdAt: rows[0].created_at,
+        sender: { id: user.id, username: user.username },
+      },
+    },
+  };
+}
+
+async function respondFriendRequest(body, req) {
+  const user = await currentUser(req);
+  if (!user) return { status: 401, body: { error: "Login required" } };
+  const requestId = normalizeUuid(body.requestId);
+  const action = body.action === "accept" ? "accepted" : "rejected";
+  if (!requestId) return { status: 400, body: { error: "Request id required" } };
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query(
+      `UPDATE friend_requests
+       SET receiver_id = COALESCE(receiver_id, $2), status = $3, responded_at = NOW()
+       WHERE id = $1 AND status = 'pending'
+       RETURNING *`,
+      [requestId, user.id, action]
+    );
+    const request = rows[0];
+    if (!request) {
+      await client.query("ROLLBACK");
+      return { status: 404, body: { error: "Friend request not found" } };
+    }
+    if (request.sender_id === user.id) {
+      await client.query("ROLLBACK");
+      return { status: 400, body: { error: "You cannot accept your own friend request" } };
+    }
+    if (action === "accepted") {
+      const users = [request.sender_id, user.id].sort();
+      await client.query(
+        `INSERT INTO friendships (user_a, user_b)
+         VALUES ($1, $2)
+         ON CONFLICT (user_a, user_b) DO NOTHING`,
+        users
+      );
+    }
+    await client.query("COMMIT");
+    return { status: 200, body: { request: { id: request.id, status: action } } };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function listFriends(_body, req) {
+  const user = await currentUser(req);
+  if (!user) return { status: 401, body: { error: "Login required" } };
+  const { rows } = await pool.query(
+    `SELECT app_users.id, app_users.username, app_users.email
+     FROM friendships
+     JOIN app_users ON app_users.id = CASE
+       WHEN friendships.user_a = $1 THEN friendships.user_b
+       ELSE friendships.user_a
+     END
+     WHERE friendships.user_a = $1 OR friendships.user_b = $1
+     ORDER BY friendships.created_at DESC`,
+    [user.id]
+  );
+  return { status: 200, body: { friends: rows.map(publicUser) } };
+}
+
+async function friendChat(body, req) {
+  const user = await currentUser(req);
+  if (!user) return { status: 401, body: { error: "Login required" } };
+  const friendId = normalizeUuid(body.friendId);
+  if (!friendId) return { status: 400, body: { error: "Friend id required" } };
+
+  const users = [user.id, friendId].sort();
+  const { rows } = await pool.query(
+    `SELECT id FROM friendships
+     WHERE user_a = $1 AND user_b = $2
+     LIMIT 1`,
+    users
+  );
+  if (!rows[0]) return { status: 403, body: { error: "You can only chat with accepted friends" } };
+  return { status: 200, body: { chatId: rows[0].id } };
+}
+
 const handlers = {
   "/api/match/join": joinPool,
   "/api/match/check": checkMatch,
@@ -1057,6 +1513,18 @@ const handlers = {
   "/api/match/report": reportChat,
   "/api/chat/assistant-message": assistantMessage,
   "/api/chat/events": addEvent,
+  "/api/auth/register": registerUser,
+  "/api/auth/login": loginUser,
+  "/api/auth/verify": verifyEmail,
+  "/api/auth/change-password": changePassword,
+  "/api/auth/me": me,
+  "/api/rooms/create": createRoom,
+  "/api/rooms/join": joinRoom,
+  "/api/rooms/delete": deleteRoom,
+  "/api/friends/request": createFriendRequest,
+  "/api/friends/respond": respondFriendRequest,
+  "/api/friends/list": listFriends,
+  "/api/friends/chat": friendChat,
 };
 
 const server = http.createServer(async (req, res) => {
@@ -1085,9 +1553,15 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/rooms/public") {
+      const result = await listVisibleRooms(url);
+      jsonResponse(req, res, result.status, result.body);
+      return;
+    }
+
     const handler = handlers[url.pathname];
     if (req.method === "POST" && handler) {
-      const result = await handler(await readJson(req));
+      const result = await handler(await readJson(req), req);
       jsonResponse(req, res, result.status, result.body);
       return;
     }

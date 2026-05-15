@@ -6,8 +6,11 @@ import {
   leaveChat,
   reportChat,
   createChatChannel,
+  createFriendRequest,
   requestAssistantMessage,
+  respondFriendRequest,
   type ChatMode,
+  type FriendRequestPayload,
   type MatchResult,
   type UserGender,
 } from "./match-api";
@@ -31,6 +34,11 @@ export interface ChatMessage {
 export interface VideoSignal {
   id: string;
   payload: Record<string, unknown>;
+}
+
+export interface IncomingFriendRequest {
+  id: string;
+  senderUsername: string;
 }
 
 const AI_FALLBACK_WAIT_MS = 2000;
@@ -89,6 +97,7 @@ export function useChat() {
   const [mode, setMode] = useState<ChatMode>("chat");
   const [isInitiator, setIsInitiator] = useState(false);
   const [videoSignals, setVideoSignals] = useState<VideoSignal[]>([]);
+  const [incomingFriendRequest, setIncomingFriendRequest] = useState<IncomingFriendRequest | null>(null);
 
   const sessionIdRef = useRef(crypto.randomUUID());
   const keyPairRef = useRef<{ publicKey: string; privateKey: string } | null>(null);
@@ -163,6 +172,7 @@ export function useChat() {
     aiIdleFollowUpCountRef.current = 0;
     aiPersonaRef.current = createAiPersona();
     setPeerTyping(false);
+    setIncomingFriendRequest(null);
   }, [clearAiTimers]);
 
   const addAiMessage = useCallback((text: string) => {
@@ -341,6 +351,16 @@ export function useChat() {
           ...prev,
           { id: crypto.randomUUID(), payload },
         ]);
+      });
+
+      channel.on("broadcast", { event: "friend-request" }, (event) => {
+        const payload = event.payload as unknown as FriendRequestPayload & { session_id?: string };
+        if (!payload || payload.session_id === sessionIdRef.current) return;
+        if (!payload.id || !payload.sender?.username) return;
+        setIncomingFriendRequest({
+          id: payload.id,
+          senderUsername: payload.sender.username,
+        });
       });
 
       channel.on("broadcast", { event: "disconnect" }, (event) => {
@@ -594,6 +614,27 @@ export function useChat() {
     });
   }, []);
 
+  const sendFriendRequest = useCallback(async (authToken: string) => {
+    if (!authToken) throw new Error("Login required for friend requests");
+    if (!channelRef.current || !chatIdRef.current) {
+      throw new Error("Friend requests are available in live stranger chats");
+    }
+    const { request } = await createFriendRequest(chatIdRef.current, authToken);
+    await channelRef.current.send({
+      type: "broadcast",
+      event: "friend-request",
+      payload: { ...request, session_id: sessionIdRef.current },
+    });
+  }, []);
+
+  const respondToFriendRequest = useCallback(
+    async (requestId: string, action: "accept" | "reject", authToken: string) => {
+      await respondFriendRequest(requestId, action, authToken);
+      setIncomingFriendRequest(null);
+    },
+    []
+  );
+
   const cancelSearch = useCallback(async () => {
     cleanup();
     await leaveChat(sessionIdRef.current);
@@ -711,11 +752,14 @@ export function useChat() {
     mode,
     isInitiator,
     videoSignals,
+    incomingFriendRequest,
     startChat,
     cancelSearch,
     sendMessage,
     sendTyping,
     sendVideoSignal,
+    sendFriendRequest,
+    respondToFriendRequest,
     skipChat,
     leaveCurrentChat,
     reportAndLeave,
