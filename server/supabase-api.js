@@ -480,7 +480,6 @@ async function requestGroqAssistant(input, session, message) {
   if (!response.ok || data.error) {
     throw new Error(data.error?.message || `Groq request failed: ${response.status}`);
   }
-  console.log("Groq raw response:", JSON.stringify(data));
 
   return humanizeAssistantText(outputTextFromChatCompletion(data));
 }
