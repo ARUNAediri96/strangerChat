@@ -9,9 +9,10 @@ import {
   requestAssistantMessage,
   type ChatMode,
   type MatchResult,
+  type UserGender,
 } from "./match-api";
 
-export type { ChatMode } from "./match-api";
+export type { ChatMode, UserGender } from "./match-api";
 
 export type ChatStatus =
   | "idle"
@@ -70,6 +71,11 @@ function createAiPersona(): AiPersona {
   };
 }
 
+function weightedAssistantGenderFor(userGender: UserGender): UserGender {
+  const oppositeGender = userGender === "male" ? "female" : "male";
+  return Math.random() < 0.7 ? oppositeGender : userGender;
+}
+
 function fallbackAssistantReply() {
   return "hmm";
 }
@@ -93,6 +99,7 @@ export function useChat() {
   const statusRef = useRef<ChatStatus>("idle");
   const filtersRef = useRef<string[]>([]);
   const modeRef = useRef<ChatMode>("chat");
+  const genderRef = useRef<UserGender>("male");
   const chatIdRef = useRef<string | null>(null);
   const startSearchingRef = useRef<((options?: SearchOptions) => Promise<void>) | null>(null);
   const aiFallbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -103,6 +110,7 @@ export function useChat() {
   const scheduleAiIdleFollowUpRef = useRef<(() => void) | null>(null);
   const aiActiveRef = useRef(false);
   const aiConversationIdRef = useRef<string | null>(null);
+  const aiAssistantGenderRef = useRef<UserGender | null>(null);
   const aiMessagesRef = useRef<ChatMessage[]>([]);
   const aiPersonaRef = useRef<AiPersona>(createAiPersona());
   const aiIdleFollowUpCountRef = useRef(0);
@@ -150,6 +158,7 @@ export function useChat() {
     }
     aiActiveRef.current = false;
     aiConversationIdRef.current = null;
+    aiAssistantGenderRef.current = null;
     aiMessagesRef.current = [];
     aiIdleFollowUpCountRef.current = 0;
     aiPersonaRef.current = createAiPersona();
@@ -219,6 +228,8 @@ export function useChat() {
       void requestAssistantMessage({
         conversationId: aiConversationIdRef.current,
         sessionId: sessionIdRef.current,
+        userGender: genderRef.current,
+        assistantGender: aiAssistantGenderRef.current ?? weightedAssistantGenderFor(genderRef.current),
         message: "The user has been quiet for a short time. Send one brief, natural follow-up message.",
         idleFollowUp: true,
         history,
@@ -246,10 +257,6 @@ export function useChat() {
       return;
     }
 
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
     if (aiFallbackTimeoutRef.current) {
       clearTimeout(aiFallbackTimeoutRef.current);
       aiFallbackTimeoutRef.current = null;
@@ -257,6 +264,7 @@ export function useChat() {
 
     aiActiveRef.current = true;
     aiConversationIdRef.current = `assistant-${crypto.randomUUID()}`;
+    aiAssistantGenderRef.current = weightedAssistantGenderFor(genderRef.current);
     aiMessagesRef.current = [];
     aiIdleFollowUpCountRef.current = 0;
     aiPersonaRef.current = createAiPersona();
@@ -367,6 +375,7 @@ export function useChat() {
         setMessages([]);
       }
       aiConversationIdRef.current = null;
+      aiAssistantGenderRef.current = null;
       setPeerTyping(false);
       setChatId(result.chatId);
       chatIdRef.current = result.chatId;
@@ -416,9 +425,15 @@ export function useChat() {
     }
 
     try {
-      const result = await joinPool(sessionId, filters, keyPair.publicKey, selectedMode);
+      const result = await joinPool(
+        sessionId,
+        filters,
+        keyPair.publicKey,
+        selectedMode,
+        genderRef.current
+      );
 
-      if (String(statusRef.current) !== "searching" || aiActiveRef.current) return;
+      if (String(statusRef.current) !== "searching" && !aiActiveRef.current) return;
 
       if (result.matched && result.chatId && result.peerPublicKey) {
         if (aiFallbackTimeoutRef.current) {
@@ -427,7 +442,7 @@ export function useChat() {
         }
         applyMatch(result);
       } else {
-        if (selectedMode === "chat" && !startAiFallbackTimerImmediately) {
+        if (selectedMode === "chat" && !startAiFallbackTimerImmediately && !aiActiveRef.current) {
           aiFallbackTimeoutRef.current = setTimeout(() => {
             void startAiFallback();
           }, aiFallbackWaitMs);
@@ -460,9 +475,10 @@ export function useChat() {
   startSearchingRef.current = startSearching;
 
   const startChat = useCallback(
-    (filters: string[], selectedMode: ChatMode) => {
+    (filters: string[], selectedMode: ChatMode, selectedGender: UserGender) => {
       filtersRef.current = filters;
       modeRef.current = selectedMode;
+      genderRef.current = selectedGender;
       setMode(selectedMode);
       // New session for each new chat start
       sessionIdRef.current = crypto.randomUUID();
@@ -509,6 +525,8 @@ export function useChat() {
         void requestAssistantMessage({
           conversationId,
           sessionId: sessionIdRef.current,
+          userGender: genderRef.current,
+          assistantGender: aiAssistantGenderRef.current ?? weightedAssistantGenderFor(genderRef.current),
           message: text,
           history,
         })

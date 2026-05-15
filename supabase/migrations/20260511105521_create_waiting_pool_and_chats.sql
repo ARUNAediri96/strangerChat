@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS waiting_pool (
   filters text[] NOT NULL DEFAULT '{}',
   public_key text NOT NULL DEFAULT '',
   mode text NOT NULL DEFAULT 'chat' CHECK (mode IN ('chat', 'video')),
+  gender text NOT NULL DEFAULT 'male' CHECK (gender IN ('male', 'female')),
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -89,6 +90,7 @@ CREATE TABLE IF NOT EXISTS chat_events (
 CREATE INDEX IF NOT EXISTS idx_waiting_pool_session ON waiting_pool(session_id);
 CREATE INDEX IF NOT EXISTS idx_waiting_pool_filters ON waiting_pool USING GIN(filters);
 CREATE INDEX IF NOT EXISTS idx_waiting_pool_mode_created ON waiting_pool(mode, created_at);
+CREATE INDEX IF NOT EXISTS idx_waiting_pool_mode_gender_created ON waiting_pool(mode, gender, created_at);
 CREATE INDEX IF NOT EXISTS idx_active_chats_user_a ON active_chats(user_a_session);
 CREATE INDEX IF NOT EXISTS idx_active_chats_user_b ON active_chats(user_b_session);
 CREATE INDEX IF NOT EXISTS idx_active_chats_expires ON active_chats(expires_at);

@@ -13,6 +13,8 @@ const allowedOrigins = (process.env.CORS_ORIGIN || "http://localhost:5173")
 const openAiApiKey = process.env.OPENAI_API_KEY || "";
 const openAiModel = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 const assistantProvider = String(process.env.ASSISTANT_PROVIDER || "auto").toLowerCase();
+const groqApiKey = process.env.GROQ_API_KEY || "";
+const groqModel = process.env.GROQ_MODEL || "llama-3.1-8b-instant";
 const hfToken = process.env.HF_TOKEN || process.env.HUGGINGFACE_API_KEY || "";
 const hfModel = process.env.HF_MODEL || "Qwen/Qwen2.5-7B-Instruct";
 const hfBaseUrl = (process.env.HF_BASE_URL || "https://router.huggingface.co/v1").replace(/\/+$/g, "");
@@ -28,7 +30,10 @@ const turnUsername = process.env.TURN_USERNAME || "";
 const turnCredential = process.env.TURN_CREDENTIAL || "";
 const meteredDomain = process.env.METERED_DOMAIN || "";
 const meteredSecretKey = process.env.METERED_SECRET_KEY || "";
-const OPENAI_COOLDOWN_MS = 5 * 60 * 1000;
+const ASSISTANT_REPLY_DELAY_MIN_MS = 2000;
+const ASSISTANT_REPLY_DELAY_MAX_MS = 3000;
+const ASSISTANT_PROVIDER_COOLDOWN_MS = 5 * 60 * 1000;
+let groqDisabledUntil = 0;
 let openAiDisabledUntil = 0;
 let hfDisabledUntil = 0;
 
@@ -67,16 +72,16 @@ function pick(items) {
 }
 
 function weightedAssistantGender(userGender) {
-  const user = String(userGender || "").toUpperCase();
+  const user = String(userGender || "").toLowerCase();
   const roll = Math.random();
 
-  if (user === "M") return roll < 0.6 ? "F" : "M";
-  if (user === "F") return roll < 0.6 ? "M" : "F";
+  if (user === "male" || user === "m") return roll < 0.7 ? "F" : "M";
+  if (user === "female" || user === "f") return roll < 0.7 ? "M" : "F";
   return roll < 0.5 ? "F" : "M";
 }
 
-function createAssistantSession() {
-  const gender = weightedAssistantGender();
+function createAssistantSession(assistantGender) {
+  const gender = assistantGender ? assistantGenderCode(assistantGender) : weightedAssistantGender();
 
   return {
     persona: {
@@ -88,7 +93,7 @@ function createAssistantSession() {
       mood: pick(["playful", "dry", "curious", "sleepy", "shy"]),
       textingStyle: pick(assistantTextingStyles),
       humorStyle: pick(assistantHumorStyles),
-      genderLocked: false,
+      genderLocked: Boolean(assistantGender),
     },
     memory: {
       summary: "",
@@ -112,12 +117,19 @@ function ensureAssistantPersona(session) {
   session.persona.genderLocked = true;
 }
 
-function assistantSessionFor(id) {
+function assistantSessionFor(id, assistantGender) {
   const key = String(id || "default").slice(0, 120);
   if (!assistantSessions.has(key)) {
-    assistantSessions.set(key, createAssistantSession());
+    assistantSessions.set(key, createAssistantSession(assistantGender));
   }
-  return assistantSessions.get(key);
+  const session = assistantSessions.get(key);
+  if (assistantGender && !session.persona.genderLocked) {
+    const gender = assistantGenderCode(assistantGender);
+    session.persona.gender = gender;
+    session.persona.name = pick(assistantNamesByGender[gender]);
+    session.persona.genderLocked = true;
+  }
+  return session;
 }
 
 function corsOriginFor(req) {
@@ -224,6 +236,19 @@ function normalizeUuid(value) {
 
 function normalizeMode(value) {
   return value === "video" ? "video" : "chat";
+}
+
+function normalizeGender(value) {
+  return String(value || "").toLowerCase() === "female" ? "female" : "male";
+}
+
+function weightedAssistantGenderFor(userGender) {
+  const genderCode = weightedAssistantGender(userGender);
+  return genderCode === "F" ? "female" : "male";
+}
+
+function assistantGenderCode(gender) {
+  return normalizeGender(gender) === "male" ? "M" : "F";
 }
 
 function parseJson(value, fallback) {
@@ -344,7 +369,7 @@ IMPORTANT RULES:
 - Match the energy of the user.
 - Avoid very long paragraphs at the start of a chat.
 - Keep the selected personality consistent throughout this conversation session.
-- The selected personality may be male or female, with gender chosen by backend session logic using these relative weights: for male users, prefer female 30 and male 20; for female users, prefer male 30 and female 20.
+- The selected personality gender is fixed for this conversation by backend session logic: male users get a female persona 70% of the time and a male persona 30% of the time; female users get a male persona 70% of the time and a female persona 30% of the time.
 - Each personality should feel unique, with different interests, texting styles, energy levels, humor styles, and conversation habits.
 - Some personalities can be talkative, shy, funny, calm, or mature based on the persona details.
 - If asked gender/name/age/country/hobby, answer directly using persona details.
@@ -411,7 +436,16 @@ function shouldUseProvider(provider, hasKey, disabledUntil) {
   if (!hasKey || Date.now() < disabledUntil) return false;
   if (assistantProvider === "local") return false;
   if (assistantProvider === "auto") return true;
+  if (assistantProvider === "groq" && provider !== "groq") return true;
   return assistantProvider === provider;
+}
+
+function assistantReplyDelay() {
+  const delay =
+    ASSISTANT_REPLY_DELAY_MIN_MS +
+    Math.floor(Math.random() * (ASSISTANT_REPLY_DELAY_MAX_MS - ASSISTANT_REPLY_DELAY_MIN_MS + 1));
+
+  return new Promise((resolve) => setTimeout(resolve, delay));
 }
 
 function updateAssistantSummary(session, history, message, messages) {
@@ -422,6 +456,33 @@ function updateAssistantSummary(session, history, message, messages) {
 
 function outputTextFromChatCompletion(data) {
   return String(data?.choices?.[0]?.message?.content || "").trim();
+}
+
+async function requestGroqAssistant(input, session, message) {
+  const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${groqApiKey}`,
+    },
+    body: JSON.stringify({
+      model: groqModel,
+      messages: [
+        { role: "system", content: assistantInstructions(session, message) },
+        ...input,
+      ],
+      max_tokens: 120,
+      temperature: 0.85,
+    }),
+  });
+
+  const data = await response.json();
+  if (!response.ok || data.error) {
+    throw new Error(data.error?.message || `Groq request failed: ${response.status}`);
+  }
+  console.log("Groq raw response:", JSON.stringify(data));
+
+  return humanizeAssistantText(outputTextFromChatCompletion(data));
 }
 
 async function requestHuggingFaceAssistant(input, session, message) {
@@ -672,6 +733,10 @@ function localAssistantReply(message, session) {
 async function assistantMessage(body) {
   const conversationId = String(body.conversationId || body.sessionId || "");
   const sessionId = normalizeUuid(body.sessionId);
+  const userGender = normalizeGender(body.userGender);
+  const assistantGender = body.assistantGender
+    ? normalizeGender(body.assistantGender)
+    : weightedAssistantGenderFor(userGender);
   const message = String(body.message || "").trim();
   const history = normalizeAssistantHistory(body.history);
 
@@ -679,10 +744,12 @@ async function assistantMessage(body) {
     return { status: 400, body: { error: "conversationId, sessionId, and message required" } };
   }
 
-  const session = assistantSessionFor(conversationId);
+  const session = assistantSessionFor(conversationId, assistantGender);
   updateAssistantMemory(message, session);
   ensureAssistantPersona(session);
   updateConversationState(message, session);
+
+  await assistantReplyDelay();
 
   if (assistantProvider === "local" || Math.random() < localReplyChance) {
     return { status: 200, body: { messages: localAssistantReply(message, session) } };
@@ -696,6 +763,26 @@ async function assistantMessage(body) {
     { role: "user", content: message },
   ];
 
+  if (shouldUseProvider("groq", groqApiKey, groqDisabledUntil)) {
+    try {
+      const messages = await requestGroqAssistant(input, session, message);
+      updateAssistantSummary(session, history, message, messages);
+
+      return { status: 200, body: { messages } };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (/quota|billing|rate limit|429|incorrect api key|invalid api key|unauthorized|401|403/i.test(errorMessage)) {
+        groqDisabledUntil = Date.now() + ASSISTANT_PROVIDER_COOLDOWN_MS;
+        console.error(
+          `Assistant Groq disabled for ${ASSISTANT_PROVIDER_COOLDOWN_MS / 60000} minutes: ${errorMessage}`
+        );
+      } else {
+        console.error("Assistant Groq message error:", error);
+      }
+
+    }
+  }
+
   if (shouldUseProvider("huggingface", hfToken, hfDisabledUntil)) {
     try {
       const messages = await requestHuggingFaceAssistant(input, session, message);
@@ -705,9 +792,9 @@ async function assistantMessage(body) {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       if (/quota|billing|rate limit|429|incorrect api key|invalid api key|unauthorized|401|403/i.test(errorMessage)) {
-        hfDisabledUntil = Date.now() + OPENAI_COOLDOWN_MS;
+        hfDisabledUntil = Date.now() + ASSISTANT_PROVIDER_COOLDOWN_MS;
         console.error(
-          `Assistant Hugging Face disabled for ${OPENAI_COOLDOWN_MS / 60000} minutes: ${errorMessage}`
+          `Assistant Hugging Face disabled for ${ASSISTANT_PROVIDER_COOLDOWN_MS / 60000} minutes: ${errorMessage}`
         );
       } else {
         console.error("Assistant Hugging Face message error:", error);
@@ -728,9 +815,9 @@ async function assistantMessage(body) {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       if (/quota|billing|rate limit|429|incorrect api key|invalid api key|401/i.test(errorMessage)) {
-        openAiDisabledUntil = Date.now() + OPENAI_COOLDOWN_MS;
+        openAiDisabledUntil = Date.now() + ASSISTANT_PROVIDER_COOLDOWN_MS;
         console.error(
-          `Assistant OpenAI disabled for ${OPENAI_COOLDOWN_MS / 60000} minutes: ${errorMessage}`
+          `Assistant OpenAI disabled for ${ASSISTANT_PROVIDER_COOLDOWN_MS / 60000} minutes: ${errorMessage}`
         );
       } else {
         console.error("Assistant OpenAI message error:", error);
@@ -740,11 +827,13 @@ async function assistantMessage(body) {
     }
   }
 
-  if (assistantProvider === "huggingface" && !hfToken) {
+  if (assistantProvider === "groq" && !groqApiKey) {
+    console.warn("ASSISTANT_PROVIDER=groq is set but GROQ_API_KEY is missing.");
+  } else if (assistantProvider === "huggingface" && !hfToken) {
     console.warn("ASSISTANT_PROVIDER=huggingface is set but HF_TOKEN is missing.");
   } else if (assistantProvider === "openai" && !openAiApiKey) {
     console.warn("ASSISTANT_PROVIDER=openai is set but OPENAI_API_KEY is missing.");
-  } else if (!["auto", "huggingface", "openai", "local"].includes(assistantProvider)) {
+  } else if (!["auto", "groq", "huggingface", "openai", "local"].includes(assistantProvider)) {
     console.warn(`Unknown ASSISTANT_PROVIDER "${assistantProvider}". Using local assistant replies.`);
   }
 
@@ -762,6 +851,7 @@ async function joinPool(body) {
   const filters = normalizeFilters(body.filters);
   const publicKey = String(body.publicKey || "");
   const mode = normalizeMode(body.mode);
+  const gender = normalizeGender(body.gender);
 
   if (!sessionId) return { status: 400, body: { error: "sessionId required" } };
 
@@ -772,8 +862,8 @@ async function joinPool(body) {
     await client.query("DELETE FROM waiting_pool WHERE session_id = $1", [sessionId]);
 
     const { rows: poolRows } = await client.query(
-      "SELECT * FROM waiting_pool WHERE session_id <> $1 AND mode = $2 ORDER BY created_at ASC FOR UPDATE",
-      [sessionId, mode]
+      "SELECT * FROM waiting_pool WHERE session_id <> $1 AND mode = $2 AND gender <> $3 ORDER BY created_at ASC FOR UPDATE",
+      [sessionId, mode, gender]
     );
 
     let bestMatch = null;
@@ -830,8 +920,8 @@ async function joinPool(body) {
     }
 
     await client.query(
-      "INSERT INTO waiting_pool (session_id, filters, public_key, mode) VALUES ($1, $2, $3, $4)",
-      [sessionId, filters, publicKey, mode]
+      "INSERT INTO waiting_pool (session_id, filters, public_key, mode, gender) VALUES ($1, $2, $3, $4, $5)",
+      [sessionId, filters, publicKey, mode, gender]
     );
     await client.query("COMMIT");
     return { status: 200, body: { matched: false, status: "waiting" } };

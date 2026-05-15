@@ -12,6 +12,7 @@ export interface MatchResult {
 }
 
 export type ChatMode = "chat" | "video";
+export type UserGender = "male" | "female";
 
 interface ChatEvent {
   id: number;
@@ -27,6 +28,8 @@ interface EventResponse {
 export interface AssistantReplyRequest {
   conversationId: string;
   sessionId: string;
+  userGender: UserGender;
+  assistantGender: UserGender;
   message: string;
   idleFollowUp?: boolean;
   history: Array<{
@@ -71,9 +74,10 @@ export async function joinPool(
   sessionId: string,
   filters: string[],
   publicKey: string,
-  mode: ChatMode
+  mode: ChatMode,
+  gender: UserGender
 ): Promise<MatchResult> {
-  return apiCall("/api/match/join", { sessionId, filters, publicKey, mode });
+  return apiCall("/api/match/join", { sessionId, filters, publicKey, mode, gender });
 }
 
 export async function checkMatch(sessionId: string): Promise<MatchResult> {

@@ -14,6 +14,7 @@ interface MatchRequest {
   filters: string[];
   publicKey: string;
   mode?: "chat" | "video";
+  gender?: "male" | "female";
 }
 
 function calculateSimilarity(filtersA: string[], filtersB: string[]): number {
@@ -31,6 +32,10 @@ function calculateSimilarity(filtersA: string[], filtersB: string[]): number {
 
 function normalizeMode(value: unknown): "chat" | "video" {
   return value === "video" ? "video" : "chat";
+}
+
+function normalizeGender(value: unknown): "male" | "female" {
+  return value === "female" ? "female" : "male";
 }
 
 Deno.serve(async (req: Request) => {
@@ -53,6 +58,7 @@ Deno.serve(async (req: Request) => {
         const body: MatchRequest = await req.json();
         const { sessionId, filters, publicKey } = body;
         const mode = normalizeMode(body.mode);
+        const gender = normalizeGender(body.gender);
 
         if (!sessionId) {
           return new Response(
@@ -70,6 +76,7 @@ Deno.serve(async (req: Request) => {
           .select("*")
           .neq("session_id", sessionId)
           .eq("mode", mode)
+          .neq("gender", gender)
           .order("created_at", { ascending: true });
 
         if (poolError) {
@@ -145,6 +152,7 @@ Deno.serve(async (req: Request) => {
           filters,
           public_key: publicKey || "",
           mode,
+          gender,
         });
 
         if (insertError) {

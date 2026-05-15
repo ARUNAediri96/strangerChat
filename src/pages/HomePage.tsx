@@ -1,13 +1,13 @@
 import { useState } from "react";
-import { MessageCircle, Shield, Video, Zap, Eye, X } from "lucide-react";
+import { CircleUser, MessageCircle, Shield, UserRound, Video, Zap, Eye, X } from "lucide-react";
 import FilterInput from "../components/FilterInput";
 import SearchAnimation from "../components/SearchAnimation";
-import type { ChatMode, ChatStatus } from "../lib/use-chat";
+import type { ChatMode, ChatStatus, UserGender } from "../lib/use-chat";
 
 interface HomePageProps {
   status: ChatStatus;
   matchedFilters: string[];
-  onStartChat: (filters: string[], mode: ChatMode) => void;
+  onStartChat: (filters: string[], mode: ChatMode, gender: UserGender) => void;
   onCancelSearch: () => void;
 }
 
@@ -18,6 +18,7 @@ export default function HomePage({
 }: HomePageProps) {
   const [filters, setFilters] = useState<string[]>([]);
   const [mode, setMode] = useState<ChatMode>("chat");
+  const [gender, setGender] = useState<UserGender>("male");
 
   const isSearching = status === "searching" || status === "generating-keys";
 
@@ -93,6 +94,38 @@ export default function HomePage({
                 </p>
               </div>
 
+              <div className="mb-5">
+                <label className="mb-2 block text-sm font-medium text-gray-400">
+                  Select your gender
+                </label>
+                <div className="grid grid-cols-2 gap-2 rounded-xl bg-white/[0.04] border border-white/[0.08] p-1">
+                  <button
+                    type="button"
+                    onClick={() => setGender("male")}
+                    className={`flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-semibold transition-all ${
+                      gender === "male"
+                        ? "bg-cyan-500 text-white shadow-lg shadow-cyan-500/20"
+                        : "text-gray-400 hover:text-white hover:bg-white/[0.06]"
+                    }`}
+                  >
+                    <UserRound size={17} />
+                    Male
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setGender("female")}
+                    className={`flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-semibold transition-all ${
+                      gender === "female"
+                        ? "bg-rose-500 text-white shadow-lg shadow-rose-500/20"
+                        : "text-gray-400 hover:text-white hover:bg-white/[0.06]"
+                    }`}
+                  >
+                    <CircleUser size={17} />
+                    Female
+                  </button>
+                </div>
+              </div>
+
               <div className="mb-5 grid grid-cols-2 gap-2 rounded-xl bg-white/[0.04] border border-white/[0.08] p-1">
                 <button
                   type="button"
@@ -128,7 +161,7 @@ export default function HomePage({
               </div>
 
               <button
-                onClick={() => onStartChat(filters, mode)}
+                onClick={() => onStartChat(filters, mode, gender)}
                 className="w-full py-3.5 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-white font-semibold rounded-xl transition-all duration-200 shadow-lg shadow-emerald-500/20 hover:shadow-emerald-500/30 active:scale-[0.98]"
               >
                 {mode === "video" ? "Start Video Call" : "Start Chat"}

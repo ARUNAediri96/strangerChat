@@ -10,9 +10,10 @@ CREATE TABLE IF NOT EXISTS waiting_pool (
   filters JSON NOT NULL,
   public_key TEXT NOT NULL,
   mode ENUM('chat', 'video') NOT NULL DEFAULT 'chat',
+  gender ENUM('male', 'female') NOT NULL DEFAULT 'male',
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_waiting_pool_created_at (created_at),
-  INDEX idx_waiting_pool_mode_created (mode, created_at)
+  INDEX idx_waiting_pool_mode_gender_created (mode, gender, created_at)
 );
 
 CREATE TABLE IF NOT EXISTS active_chats (
