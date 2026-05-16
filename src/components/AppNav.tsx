@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type MouseEvent } from "react";
 import type { AppUser } from "../lib/match-api";
 
 interface AppNavProps {
@@ -22,19 +22,36 @@ export default function AppNav({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
 
+  function handleNavClick(event: MouseEvent<HTMLAnchorElement>, page: string) {
+    event.preventDefault();
+    onNavigate(page);
+  }
+
   return (
     <>
       <header className="relative z-30 border-b border-white/10 bg-gray-950/80 backdrop-blur-xl">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-4">
-          <button onClick={() => onNavigate("home")} className="text-xl font-bold text-white">
+          <a href="/" onClick={(event) => handleNavClick(event, "home")} className="text-xl font-bold text-white">
             Stranger<span className="text-emerald-400">Chat</span>
-          </button>
-          <nav className="flex flex-wrap items-center gap-3 text-sm text-gray-400">
-            {["home", "rooms", "friends", "blog", "about", "support"].map((item) => (
-              <button key={item} onClick={() => onNavigate(item)} className="capitalize hover:text-white">
+          </a>
+          <nav className="flex flex-wrap items-center gap-2 text-sm text-gray-400 sm:gap-3">
+            {["rooms", "friends", "blog", "about", "support"].map((item) => (
+              <a
+                key={item}
+                href={`/${item}`}
+                onClick={(event) => handleNavClick(event, item)}
+                className="flex min-h-[40px] items-center px-1 capitalize hover:text-white"
+              >
                 {item}
-              </button>
+              </a>
             ))}
+            <a
+              href="/"
+              onClick={(event) => handleNavClick(event, "home")}
+              className="flex min-h-[40px] items-center rounded-lg bg-emerald-500 px-3 font-semibold text-slate-950 hover:bg-emerald-300"
+            >
+              Start Chat
+            </a>
             {currentUser ? (
               <div className="relative">
                 <button

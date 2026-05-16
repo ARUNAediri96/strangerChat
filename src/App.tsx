@@ -21,6 +21,14 @@ function pageFromHash() {
   return hash || "home";
 }
 
+function pageFromLocation() {
+  const pathPage = window.location.pathname.replace(/^\/+|\/+$/g, "");
+  if (pathPage && ["rooms", "friends", "blog", "about", "support"].includes(pathPage)) {
+    return pathPage;
+  }
+  return pageFromHash();
+}
+
 function verificationTokenFromLocation() {
   const hash = window.location.hash.replace(/^#\/?/, "");
   if (hash.startsWith("verify=")) return decodeURIComponent(hash.slice("verify=".length));
@@ -30,8 +38,52 @@ function verificationTokenFromLocation() {
   return hashParams.get("verify") || hashParams.get("token") || searchParams.get("verify") || searchParams.get("token");
 }
 
+const routeMetadata: Record<string, { title: string; description: string; canonical: string }> = {
+  home: {
+    title: "StrangerChat: Omegle Alternative & Anonymous Chat",
+    description:
+      "StrangerChat is a safe Omegle alternative for anonymous chat with strangers. Start free random text or video chat with no signup, interest filters, and chat rooms.",
+    canonical: "https://chatstranger.online/",
+  },
+  rooms: {
+    title: "Online Chat Rooms | StrangerChat",
+    description:
+      "Create or join public online chat rooms and private token rooms on StrangerChat. Chat with people by room, username, and topic.",
+    canonical: "https://chatstranger.online/rooms",
+  },
+  friends: {
+    title: "Friends Chat | StrangerChat",
+    description:
+      "Use verified StrangerChat accounts to send friend requests after anonymous chats and continue known-friend conversations.",
+    canonical: "https://chatstranger.online/friends",
+  },
+  blog: {
+    title: "Anonymous Chat Tips & Omegle Alternative Guides | StrangerChat",
+    description:
+      "Read StrangerChat guides for safer random chat, anonymous chat etiquette, video chat with strangers, and online chat rooms.",
+    canonical: "https://chatstranger.online/blog",
+  },
+  about: {
+    title: "About StrangerChat | Anonymous Random Chat",
+    description:
+      "Learn about StrangerChat, a free anonymous random chat and video chat platform with interest matching, rooms, and safety controls.",
+    canonical: "https://chatstranger.online/about",
+  },
+  support: {
+    title: "Support | StrangerChat",
+    description:
+      "Get help with StrangerChat random chat, anonymous video chat, private room tokens, accounts, verification, and safety reporting.",
+    canonical: "https://chatstranger.online/support",
+  },
+};
+
+function setMetaTag(selector: string, attribute: "content" | "href", value: string) {
+  const element = document.head.querySelector(selector);
+  if (element) element.setAttribute(attribute, value);
+}
+
 function App() {
-  const [page, setPage] = useState(pageFromHash);
+  const [page, setPage] = useState(pageFromLocation);
   const [authToken, setAuthToken] = useState(() => localStorage.getItem("auth_token") || "");
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
   const {
@@ -77,14 +129,30 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const handleHash = () => {
+    const handleRouteChange = () => {
       if (handleVerificationHash()) return;
-      setPage(pageFromHash());
+      setPage(pageFromLocation());
     };
-    handleHash();
-    window.addEventListener("hashchange", handleHash);
-    return () => window.removeEventListener("hashchange", handleHash);
+    handleRouteChange();
+    window.addEventListener("hashchange", handleRouteChange);
+    window.addEventListener("popstate", handleRouteChange);
+    return () => {
+      window.removeEventListener("hashchange", handleRouteChange);
+      window.removeEventListener("popstate", handleRouteChange);
+    };
   }, [handleVerificationHash]);
+
+  useEffect(() => {
+    const metadata = routeMetadata[page] || routeMetadata.home;
+    document.title = metadata.title;
+    setMetaTag('meta[name="description"]', "content", metadata.description);
+    setMetaTag('meta[property="og:title"]', "content", metadata.title);
+    setMetaTag('meta[property="og:description"]', "content", metadata.description);
+    setMetaTag('meta[property="og:url"]', "content", metadata.canonical);
+    setMetaTag('meta[name="twitter:title"]', "content", metadata.title);
+    setMetaTag('meta[name="twitter:description"]', "content", metadata.description);
+    setMetaTag('link[rel="canonical"]', "href", metadata.canonical);
+  }, [page]);
 
   useEffect(() => {
     if (!authToken) {
@@ -100,7 +168,8 @@ function App() {
   }, [authToken]);
 
   function navigate(nextPage: string) {
-    window.location.hash = nextPage === "home" ? "" : nextPage;
+    const nextPath = nextPage === "home" ? "/" : `/${nextPage}`;
+    window.history.pushState(null, "", nextPath);
     setPage(nextPage);
   }
 

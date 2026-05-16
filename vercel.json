@@ -12,5 +12,11 @@
       "destination": "https://chatstranger.online/$1",
       "permanent": true
     }
+  ],
+  "rewrites": [
+    {
+      "source": "/:path((?!api|assets|favicon\\.svg|apple-touch-icon\\.svg|og-image\\.svg|robots\\.txt|sitemap\\.xml).*)",
+      "destination": "/index.html"
+    }
   ]
 }
