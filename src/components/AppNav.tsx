@@ -1,9 +1,14 @@
 import { useState, type MouseEvent } from "react";
+import { Moon, Sun } from "lucide-react";
 import type { AppUser } from "../lib/match-api";
 
+type AppTheme = "light" | "dark";
+
 interface AppNavProps {
+  theme: AppTheme;
   currentUser: AppUser | null;
   onNavigate: (page: string) => void;
+  onThemeChange: (theme: AppTheme) => void;
   onLogin: (email: string, password: string) => Promise<void>;
   onRegister: (email: string, username: string, password: string) => Promise<string | null>;
   onLogout: () => void;
@@ -11,8 +16,10 @@ interface AppNavProps {
 }
 
 export default function AppNav({
+  theme,
   currentUser,
   onNavigate,
+  onThemeChange,
   onLogin,
   onRegister,
   onLogout,
@@ -52,6 +59,16 @@ export default function AppNav({
             >
               Start Chat
             </a>
+            <button
+              type="button"
+              onClick={() => onThemeChange(theme === "light" ? "dark" : "light")}
+              className="inline-flex min-h-[40px] items-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 font-semibold text-gray-200 transition hover:bg-white/10 hover:text-white focus:outline-none focus:ring-2 focus:ring-emerald-300/60"
+              aria-label={`Switch to ${theme === "light" ? "dark" : "light"} theme`}
+              title={`Switch to ${theme === "light" ? "dark" : "light"} theme`}
+            >
+              {theme === "light" ? <Moon size={17} /> : <Sun size={17} />}
+              <span className="hidden sm:inline">{theme === "light" ? "Dark" : "Light"}</span>
+            </button>
             {currentUser ? (
               <div className="relative">
                 <button

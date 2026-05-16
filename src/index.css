@@ -26,15 +26,140 @@
   }
 
   body {
-    background: #030712;
-    color: #f9fafb;
+    background: #f7fafc;
+    color: #0f172a;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+  }
+
+  html[data-theme="dark"] body {
+    background: #030712;
+    color: #f9fafb;
   }
 
   ::selection {
     background: rgba(16, 185, 129, 0.3);
     color: white;
+  }
+}
+
+@layer utilities {
+  html[data-theme="light"] .bg-gray-950,
+  html[data-theme="light"] .bg-slate-950 {
+    background-color: #f7fafc !important;
+  }
+
+  html[data-theme="light"] .bg-gray-950\/80,
+  html[data-theme="light"] .bg-gray-950\/90,
+  html[data-theme="light"] .bg-slate-950\/80,
+  html[data-theme="light"] .bg-slate-950\/85,
+  html[data-theme="light"] .bg-slate-950\/95,
+  html[data-theme="light"] .bg-slate-950\/70 {
+    background-color: rgba(255, 255, 255, 0.88) !important;
+  }
+
+  html[data-theme="light"] .bg-slate-900\/50,
+  html[data-theme="light"] .bg-slate-900\/60 {
+    background-color: rgba(226, 232, 240, 0.58) !important;
+  }
+
+  html[data-theme="light"] .bg-white\/\[0\.03\],
+  html[data-theme="light"] .bg-white\/\[0\.04\],
+  html[data-theme="light"] .bg-white\/\[0\.05\],
+  html[data-theme="light"] .bg-white\/\[0\.06\],
+  html[data-theme="light"] .bg-white\/\[0\.07\],
+  html[data-theme="light"] .bg-white\/\[0\.08\] {
+    background-color: rgba(255, 255, 255, 0.82) !important;
+  }
+
+  html[data-theme="light"] .hover\:bg-white\/10:hover,
+  html[data-theme="light"] .hover\:bg-white\/\[0\.08\]:hover,
+  html[data-theme="light"] .hover\:bg-white\/\[0\.1\]:hover {
+    background-color: rgba(15, 23, 42, 0.06) !important;
+  }
+
+  html[data-theme="light"] [class*="bg-\[radial-gradient"],
+  html[data-theme="light"] [class*="bg-\[linear-gradient"] {
+    background-image:
+      radial-gradient(circle at 18% 10%, rgba(20, 184, 166, 0.18), transparent 32%),
+      radial-gradient(circle at 82% 20%, rgba(14, 165, 233, 0.16), transparent 30%),
+      linear-gradient(135deg, #ffffff 0%, #f1f5f9 52%, #e0f2fe 100%) !important;
+  }
+
+  html[data-theme="light"] .border-white\/10,
+  html[data-theme="light"] .border-white\/15,
+  html[data-theme="light"] .border-white\/20 {
+    border-color: rgba(15, 23, 42, 0.12) !important;
+  }
+
+  html[data-theme="light"] .text-white {
+    color: #0f172a !important;
+  }
+
+  html[data-theme="light"] .text-gray-100,
+  html[data-theme="light"] .text-gray-200,
+  html[data-theme="light"] .text-gray-300,
+  html[data-theme="light"] .text-slate-100,
+  html[data-theme="light"] .text-slate-200,
+  html[data-theme="light"] .text-slate-300 {
+    color: #334155 !important;
+  }
+
+  html[data-theme="light"] .text-gray-400,
+  html[data-theme="light"] .text-gray-500,
+  html[data-theme="light"] .text-slate-400,
+  html[data-theme="light"] .text-slate-500 {
+    color: #64748b !important;
+  }
+
+  html[data-theme="light"] .text-emerald-100,
+  html[data-theme="light"] .text-emerald-200,
+  html[data-theme="light"] .text-emerald-300,
+  html[data-theme="light"] .text-emerald-400 {
+    color: #047857 !important;
+  }
+
+  html[data-theme="light"] .text-cyan-100,
+  html[data-theme="light"] .text-cyan-200,
+  html[data-theme="light"] .text-cyan-300,
+  html[data-theme="light"] .text-sky-300 {
+    color: #0369a1 !important;
+  }
+
+  html[data-theme="light"] .text-amber-200 {
+    color: #b45309 !important;
+  }
+
+  html[data-theme="light"] .text-rose-200,
+  html[data-theme="light"] .text-red-200 {
+    color: #be123c !important;
+  }
+
+  html[data-theme="light"] .bg-emerald-500 {
+    background-color: #10b981 !important;
+  }
+
+  html[data-theme="light"] .bg-cyan-400,
+  html[data-theme="light"] .bg-cyan-500 {
+    background-color: #06b6d4 !important;
+  }
+
+  html[data-theme="light"] .bg-rose-400 {
+    background-color: #fb7185 !important;
+  }
+
+  html[data-theme="light"] input,
+  html[data-theme="light"] textarea {
+    color: #0f172a !important;
+  }
+
+  html[data-theme="light"] input::placeholder,
+  html[data-theme="light"] textarea::placeholder {
+    color: #64748b !important;
+  }
+
+  html[data-theme="light"] .shadow-2xl {
+    box-shadow: 0 24px 70px rgba(15, 23, 42, 0.12) !important;
   }
 }
 

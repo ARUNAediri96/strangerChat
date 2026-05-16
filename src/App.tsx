@@ -16,6 +16,13 @@ import {
   type AppUser,
 } from "./lib/match-api";
 
+type AppTheme = "light" | "dark";
+
+function initialTheme(): AppTheme {
+  const savedTheme = localStorage.getItem("app_theme");
+  return savedTheme === "dark" ? "dark" : "light";
+}
+
 function pageFromHash() {
   const hash = window.location.hash.replace(/^#\/?/, "");
   if (hash.startsWith("verify=")) return "home";
@@ -98,6 +105,7 @@ function App() {
   const [page, setPage] = useState(pageFromLocation);
   const [authToken, setAuthToken] = useState(() => localStorage.getItem("auth_token") || "");
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
+  const [theme, setTheme] = useState<AppTheme>(initialTheme);
   const {
     status,
     messages,
@@ -167,6 +175,11 @@ function App() {
   }, [page]);
 
   useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("app_theme", theme);
+  }, [theme]);
+
+  useEffect(() => {
     const frame = window.requestAnimationFrame(scrollToCurrentHash);
     return () => window.cancelAnimationFrame(frame);
   }, [page]);
@@ -218,8 +231,10 @@ function App() {
     return (
       <>
         <AppNav
+          theme={theme}
           currentUser={currentUser}
           onNavigate={navigate}
+          onThemeChange={setTheme}
           onLogin={handleLogin}
           onRegister={handleRegister}
           onLogout={handleLogout}
