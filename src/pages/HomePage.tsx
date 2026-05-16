@@ -101,7 +101,7 @@ export default function HomePage({
 
   return (
     <main className="min-h-screen bg-slate-950 text-white">
-      <section className="border-b border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(20,184,166,0.14),transparent_34%),linear-gradient(135deg,#020617_0%,#0f172a_52%,#111827_100%)]">
+      <section id="random-chat" className="scroll-mt-24 border-b border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(20,184,166,0.14),transparent_34%),linear-gradient(135deg,#020617_0%,#0f172a_52%,#111827_100%)]">
         <div className="mx-auto grid max-w-6xl gap-8 px-4 pb-10 pt-8 md:px-6 lg:grid-cols-[1.05fr_0.95fr] lg:items-center lg:pb-14 lg:pt-12">
           <div className="max-w-2xl">
             <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-1 text-sm font-medium text-emerald-100">
@@ -181,7 +181,7 @@ export default function HomePage({
         </div>
       </section>
 
-      <section className="border-y border-white/10 bg-slate-900/50">
+      <section id="safety-controls" className="scroll-mt-24 border-y border-white/10 bg-slate-900/50">
         <div className="mx-auto grid max-w-6xl gap-8 px-4 py-10 md:px-6 lg:grid-cols-[0.8fr_1.2fr] lg:items-start lg:py-14">
           <div>
             <p className="text-sm font-bold uppercase text-emerald-300">Safety controls</p>
@@ -205,7 +205,7 @@ export default function HomePage({
         </div>
       </section>
 
-      <section className="mx-auto max-w-6xl px-4 py-10 md:px-6 lg:py-14">
+      <section id="video-chat" className="scroll-mt-24 mx-auto max-w-6xl px-4 py-10 md:px-6 lg:py-14">
         <div className="mb-7 flex flex-col justify-between gap-4 md:flex-row md:items-end">
           <div>
             <p className="text-sm font-bold uppercase text-cyan-300">Anonymous chat features</p>

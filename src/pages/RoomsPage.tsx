@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Clock, Hash, Lock, MessageCircle, Plus, Send, Trash2, Users } from "lucide-react";
+import { ArrowLeft, Check, Clock, Copy, Hash, Lock, MessageCircle, Plus, Send, Trash2, Users } from "lucide-react";
 import {
   createChatChannel,
   createMeetingRoom,
@@ -31,6 +31,7 @@ export default function RoomsPage({ onNavigate }: RoomsPageProps) {
   const [messages, setMessages] = useState<RoomMessage[]>([]);
   const [input, setInput] = useState("");
   const [notice, setNotice] = useState("");
+  const [copiedToken, setCopiedToken] = useState(false);
   const sessionIdRef = useRef(stableRoomSessionId());
   const channelRef = useRef<ReturnType<typeof createChatChannel> | null>(null);
 
@@ -75,6 +76,17 @@ export default function RoomsPage({ onNavigate }: RoomsPageProps) {
     setMessages([]);
     setNotice("");
     setActiveRoom(joined.room);
+    setCopiedToken(false);
+  }
+
+  async function copyPrivateToken(token: string) {
+    try {
+      await navigator.clipboard.writeText(token);
+      setCopiedToken(true);
+      window.setTimeout(() => setCopiedToken(false), 1800);
+    } catch {
+      setNotice("Could not copy the private token. Select it and copy manually.");
+    }
   }
 
   async function handleCreateRoom() {
@@ -154,7 +166,20 @@ export default function RoomsPage({ onNavigate }: RoomsPageProps) {
               </button>
               <h1 className="mt-1 text-2xl font-bold">{activeRoom.name}</h1>
               {activeRoom.joinToken && (
-                <p className="mt-1 text-sm text-emerald-300">Private token: {activeRoom.joinToken}</p>
+                <div className="mt-2 flex max-w-full flex-wrap items-center gap-2">
+                  <span className="break-all rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-3 py-2 text-sm font-semibold text-emerald-200">
+                    Private token: {activeRoom.joinToken}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => copyPrivateToken(activeRoom.joinToken || "")}
+                    className="inline-flex min-h-[36px] items-center gap-2 rounded-lg border border-white/10 px-3 text-sm font-semibold text-gray-200 hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-emerald-300/60"
+                    title="Copy private token"
+                  >
+                    {copiedToken ? <Check size={16} className="text-emerald-300" /> : <Copy size={16} />}
+                    {copiedToken ? "Copied" : "Copy"}
+                  </button>
+                </div>
               )}
             </div>
             <div className="flex gap-2">
@@ -231,7 +256,7 @@ export default function RoomsPage({ onNavigate }: RoomsPageProps) {
         {notice && <div className="mb-4 rounded-xl border border-yellow-400/20 bg-yellow-400/10 p-3 text-yellow-100">{notice}</div>}
 
         <div className="grid gap-5 lg:grid-cols-[360px_1fr]">
-          <section className="space-y-4 rounded-xl border border-white/10 bg-white/[0.03] p-5">
+          <section id="create-private-room" className="scroll-mt-24 space-y-4 rounded-xl border border-white/10 bg-white/[0.03] p-5">
             <input
               value={username}
               onChange={(event) => setUsername(event.target.value)}
@@ -284,7 +309,7 @@ export default function RoomsPage({ onNavigate }: RoomsPageProps) {
             </div>
           </section>
 
-          <section className="rounded-xl border border-white/10 bg-white/[0.03] p-5">
+          <section id="available-rooms" className="scroll-mt-24 rounded-xl border border-white/10 bg-white/[0.03] p-5">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-xl font-semibold">Available rooms</h2>
               <button onClick={refreshRooms} className="text-sm text-emerald-300">Refresh</button>

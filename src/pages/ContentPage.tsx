@@ -13,16 +13,25 @@ const pageCopy = {
     icon: Search,
     sections: [
       {
+        id: "blog-guides",
         title: "A modern alternative for Omegle",
         text:
           "StrangerChat keeps the instant feeling people loved from Omegle while adding interest filters, public rooms, private rooms, and safer reporting tools. You can jump into random chat without registration or create an account only when you want friend features.",
       },
       {
+        id: "safety-tips",
         title: "How to chat with strangers safely",
         text:
           "Use a nickname, avoid sharing personal details too early, and leave any conversation that feels uncomfortable. Anonymous chat works best when people keep boundaries clear and treat every stranger like a real person.",
       },
       {
+        id: "community-rules",
+        title: "Community rules",
+        text:
+          "Keep conversations respectful, do not harass or threaten people, do not share private information, and use report controls when someone breaks the rules. The goal is fast chat that still feels human and safe.",
+      },
+      {
+        id: "rooms-guide",
         title: "When to use rooms instead of random matching",
         text:
           "Online chat rooms are better for group conversations, events, classes, and friend circles. Public rooms help people discover conversations, while private rooms keep the discussion limited to people with the token.",
@@ -36,16 +45,19 @@ const pageCopy = {
     icon: Users,
     sections: [
       {
+        id: "about-strangerchat",
         title: "Anonymous by default",
         text:
           "Random chat and video chat work without signup. Registration is only needed for friend requests and known-friend messaging, so casual visitors can still chat freely.",
       },
       {
+        id: "about-rooms",
         title: "Public and private spaces",
         text:
           "Users can create public meeting rooms that anyone can join or private rooms protected by a shareable token. This makes the platform useful for both spontaneous stranger chat and planned conversations.",
       },
       {
+        id: "about-conversations",
         title: "Designed for real conversations",
         text:
           "The product combines filters, ephemeral events, room usernames, reporting, and friend requests so people can move from anonymous chat to trusted connections when both sides choose it.",
@@ -59,19 +71,40 @@ const pageCopy = {
     icon: LifeBuoy,
     sections: [
       {
+        id: "create-account",
         title: "Account and verification",
         text:
           "Create an account with email and password to use friend requests. If verification email delivery is not configured, development builds show a verification link after signup.",
       },
       {
+        id: "help",
         title: "Private room access",
         text:
           "Private rooms require the exact token generated when the room is created. Share it through WhatsApp or another private channel, then enter a username before joining.",
       },
       {
+        id: "report-abuse",
         title: "Safety and reporting",
         text:
           "Use the report button during random chats if someone violates the rules. You can skip, leave, or close a room at any time.",
+      },
+      {
+        id: "contact",
+        title: "Contact",
+        text:
+          "For account access, private room problems, reports, or general support, use the support page details and include the room name, token status, and a short description of what happened.",
+      },
+      {
+        id: "terms",
+        title: "Terms",
+        text:
+          "Use StrangerChat only for lawful, respectful conversations. Do not abuse rooms, impersonate others, spam users, or attempt to bypass moderation and safety controls.",
+      },
+      {
+        id: "privacy",
+        title: "Privacy",
+        text:
+          "Avoid sharing personal information in anonymous chats. Account features use your email for login and verification, while room tokens should be shared only with people you intend to invite.",
       },
     ],
   },
@@ -94,7 +127,7 @@ export default function ContentPage({ page }: ContentPageProps) {
 
         <div className="mt-12 grid gap-5 md:grid-cols-3">
           {copy.sections.map((section) => (
-            <article key={section.title} className="rounded-xl border border-white/10 bg-white/[0.03] p-6">
+            <article id={section.id} key={section.title} className="scroll-mt-24 rounded-xl border border-white/10 bg-white/[0.03] p-6">
               <h2 className="text-xl font-semibold">{section.title}</h2>
               <p className="mt-4 leading-7 text-gray-400">{section.text}</p>
             </article>

@@ -110,7 +110,14 @@ export default function FriendsPage({ authToken, currentUser }: FriendsPageProps
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
-      <main className="mx-auto grid max-w-6xl gap-5 px-4 py-8 lg:grid-cols-[300px_1fr]">
+      <main id="friends-chat" className="scroll-mt-24 mx-auto grid max-w-6xl gap-5 px-4 py-8 lg:grid-cols-[300px_1fr]">
+        <section id="create-account" className="scroll-mt-24 rounded-xl border border-emerald-400/20 bg-emerald-400/10 p-5 lg:col-span-2">
+          <h1 className="text-3xl font-bold">Friends chat and accounts</h1>
+          <p className="mt-3 max-w-3xl text-sm leading-6 text-gray-300">
+            Create a verified account when you want to accept friend requests after anonymous chats and continue
+            conversations with people you already trust. Random chat still works without signup.
+          </p>
+        </section>
         <aside className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
           <div className="mb-4 flex items-center gap-2 text-lg font-semibold">
             <Users size={20} /> Friends

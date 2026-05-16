@@ -6,6 +6,7 @@ import RoomsPage from "./pages/RoomsPage";
 import ContentPage from "./pages/ContentPage";
 import FriendsPage from "./pages/FriendsPage";
 import AppNav from "./components/AppNav";
+import AppFooter from "./components/AppFooter";
 import {
   changeAccountPassword,
   getCurrentUser,
@@ -18,7 +19,7 @@ import {
 function pageFromHash() {
   const hash = window.location.hash.replace(/^#\/?/, "");
   if (hash.startsWith("verify=")) return "home";
-  return hash || "home";
+  return ["rooms", "friends", "blog", "about", "support"].includes(hash) ? hash : "home";
 }
 
 function pageFromLocation() {
@@ -80,6 +81,17 @@ const routeMetadata: Record<string, { title: string; description: string; canoni
 function setMetaTag(selector: string, attribute: "content" | "href", value: string) {
   const element = document.head.querySelector(selector);
   if (element) element.setAttribute(attribute, value);
+}
+
+function scrollToCurrentHash() {
+  const targetId = window.location.hash.replace(/^#/, "");
+  if (!targetId || targetId === "home") {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    return;
+  }
+
+  const target = document.getElementById(targetId);
+  if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 function App() {
@@ -155,6 +167,11 @@ function App() {
   }, [page]);
 
   useEffect(() => {
+    const frame = window.requestAnimationFrame(scrollToCurrentHash);
+    return () => window.cancelAnimationFrame(frame);
+  }, [page]);
+
+  useEffect(() => {
     if (!authToken) {
       setCurrentUser(null);
       return;
@@ -167,10 +184,12 @@ function App() {
       });
   }, [authToken]);
 
-  function navigate(nextPage: string) {
-    const nextPath = nextPage === "home" ? "/" : `/${nextPage}`;
+  function navigate(nextTarget: string) {
+    const [nextPage, sectionId] = nextTarget.split("#");
+    const nextPath = `${nextPage === "home" ? "/" : `/${nextPage}`}${sectionId ? `#${sectionId}` : ""}`;
     window.history.pushState(null, "", nextPath);
     setPage(nextPage);
+    window.requestAnimationFrame(scrollToCurrentHash);
   }
 
   async function handleLogin(email: string, password: string) {
@@ -207,6 +226,7 @@ function App() {
           onChangePassword={handleChangePassword}
         />
         {content}
+        <AppFooter onNavigate={navigate} />
       </>
     );
   }
