@@ -69,6 +69,50 @@ const assistantTextingStyles = [
   "lowkey and sleepy",
 ];
 const assistantHumorStyles = ["dry", "playful", "random", "gentle", "sarcastic but kind"];
+const assistantPersonaStyles = {
+  playful: {
+    mood: "playful",
+    textingStyle: "funny and teasing",
+    humorStyle: "playful",
+    hobbies: ["music", "movies", "traveling"],
+  },
+  shy: {
+    mood: "shy",
+    textingStyle: "shy but curious",
+    humorStyle: "gentle",
+    hobbies: ["drawing", "music", "cooking"],
+  },
+  curious: {
+    mood: "curious",
+    textingStyle: "talkative once comfortable",
+    humorStyle: "random",
+    hobbies: ["traveling", "gaming", "movies"],
+  },
+  dry: {
+    mood: "dry",
+    textingStyle: "short and dry",
+    humorStyle: "dry",
+    hobbies: ["gaming", "fitness", "music"],
+  },
+  sleepy: {
+    mood: "sleepy",
+    textingStyle: "lowkey and sleepy",
+    humorStyle: "gentle",
+    hobbies: ["movies", "music", "cooking"],
+  },
+  calm: {
+    mood: "calm",
+    textingStyle: "calm and mature",
+    humorStyle: "gentle",
+    hobbies: ["fitness", "traveling", "drawing"],
+  },
+  funny: {
+    mood: "playful",
+    textingStyle: "funny and teasing",
+    humorStyle: "sarcastic but kind",
+    hobbies: ["gaming", "movies", "music"],
+  },
+};
 
 function pick(items) {
   return items[Math.floor(Math.random() * items.length)] || items[0];
@@ -83,8 +127,19 @@ function weightedAssistantGender(userGender) {
   return roll < 0.5 ? "F" : "M";
 }
 
-function createAssistantSession(assistantGender) {
+function normalizePersonaStyle(value) {
+  const style = String(value || "").trim().toLowerCase();
+  return assistantPersonaStyles[style] ? style : "";
+}
+
+function createAssistantSession(assistantGender, personaStyleId) {
   const gender = assistantGender ? assistantGenderCode(assistantGender) : weightedAssistantGender();
+  const styleId = normalizePersonaStyle(personaStyleId);
+  const style = assistantPersonaStyles[styleId] || null;
+  const mood = style?.mood || pick(["playful", "dry", "curious", "sleepy", "shy"]);
+  const textingStyle = style?.textingStyle || pick(assistantTextingStyles);
+  const humorStyle = style?.humorStyle || pick(assistantHumorStyles);
+  const hobby = pick(style?.hobbies || assistantHobbies);
 
   return {
     persona: {
@@ -92,10 +147,11 @@ function createAssistantSession(assistantGender) {
       country: pick(assistantCountries),
       age: 19 + Math.floor(Math.random() * 7),
       gender,
-      hobby: pick(assistantHobbies),
-      mood: pick(["playful", "dry", "curious", "sleepy", "shy"]),
-      textingStyle: pick(assistantTextingStyles),
-      humorStyle: pick(assistantHumorStyles),
+      hobby,
+      mood,
+      textingStyle,
+      humorStyle,
+      styleId: styleId || "random",
       genderLocked: Boolean(assistantGender),
     },
     memory: {
@@ -103,7 +159,7 @@ function createAssistantSession(assistantGender) {
       facts: {},
     },
     state: {
-      mood: pick(["playful", "dry", "curious", "sleepy", "shy"]),
+      mood,
       interestLevel: 5,
       trustLevel: 2,
       turns: 0,
@@ -120,10 +176,10 @@ function ensureAssistantPersona(session) {
   session.persona.genderLocked = true;
 }
 
-function assistantSessionFor(id, assistantGender) {
+function assistantSessionFor(id, assistantGender, personaStyleId) {
   const key = String(id || "default").slice(0, 120);
   if (!assistantSessions.has(key)) {
-    assistantSessions.set(key, createAssistantSession(assistantGender));
+    assistantSessions.set(key, createAssistantSession(assistantGender, personaStyleId));
   }
   const session = assistantSessions.get(key);
   if (assistantGender && !session.persona.genderLocked) {
@@ -449,6 +505,7 @@ function assistantInstructions(session, latestMessage) {
 You are inside an anonymous stranger-chat app.
 
 Persona: ${persona.age}-year-old ${persona.gender}, name ${persona.name}, from ${persona.country}, ${persona.mood}, likes ${persona.hobby}.
+Persona style for this chat: ${persona.styleId}
 Texting style: ${persona.textingStyle}
 Humor style: ${persona.humorStyle}
 Current mood: ${state.mood}
@@ -854,6 +911,7 @@ async function assistantMessage(body) {
   const assistantGender = body.assistantGender
     ? normalizeGender(body.assistantGender)
     : weightedAssistantGenderFor(userGender);
+  const personaStyle = normalizePersonaStyle(body.personaStyle);
   const message = String(body.message || "").trim();
   const history = normalizeAssistantHistory(body.history);
 
@@ -861,7 +919,7 @@ async function assistantMessage(body) {
     return { status: 400, body: { error: "conversationId, sessionId, and message required" } };
   }
 
-  const session = assistantSessionFor(conversationId, assistantGender);
+  const session = assistantSessionFor(conversationId, assistantGender, personaStyle);
   updateAssistantMemory(message, session);
   ensureAssistantPersona(session);
   updateConversationState(message, session);

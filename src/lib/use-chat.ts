@@ -57,7 +57,19 @@ interface SearchOptions {
 
 interface AiPersona {
   startedChat: boolean;
+  styleId: string;
+  greeting: string;
 }
+
+const aiPersonaStyles = [
+  { id: "playful", greeting: ["hey lol", "heyy", "yo what's up"] },
+  { id: "shy", greeting: ["hi", "hey", "umm hi"] },
+  { id: "curious", greeting: ["hey, what's up?", "hii what u doing?", "hey where u from?"] },
+  { id: "dry", greeting: ["yo", "hey", "sup"] },
+  { id: "sleepy", greeting: ["heyy", "hi im sleepy lol", "hey"] },
+  { id: "calm", greeting: ["hello", "hey there", "hi, how are you?"] },
+  { id: "funny", greeting: ["yo random person", "hey stranger", "lol hi"] },
+];
 
 function randomDelay(min: number, max: number) {
   return Math.floor(min + Math.random() * (max - min + 1));
@@ -74,9 +86,16 @@ function typingDelayFor(text: string) {
   return Math.min(1800, Math.max(350, text.length * 18 + randomDelay(100, 450)));
 }
 
-function createAiPersona(): AiPersona {
+function createAiPersona(previousStyleId?: string | null): AiPersona {
+  const candidates = previousStyleId
+    ? aiPersonaStyles.filter((style) => style.id !== previousStyleId)
+    : aiPersonaStyles;
+  const style = candidates[Math.floor(Math.random() * candidates.length)] || aiPersonaStyles[0];
+
   return {
     startedChat: Math.random() < 0.55,
+    styleId: style.id,
+    greeting: style.greeting[Math.floor(Math.random() * style.greeting.length)] || "hi",
   };
 }
 
@@ -123,6 +142,7 @@ export function useChat(authToken = "") {
   const aiAssistantGenderRef = useRef<UserGender | null>(null);
   const aiMessagesRef = useRef<ChatMessage[]>([]);
   const aiPersonaRef = useRef<AiPersona>(createAiPersona());
+  const lastAiPersonaStyleRef = useRef<string | null>(null);
   const aiIdleFollowUpCountRef = useRef(0);
 
   useEffect(() => {
@@ -171,12 +191,22 @@ export function useChat(authToken = "") {
     aiAssistantGenderRef.current = null;
     aiMessagesRef.current = [];
     aiIdleFollowUpCountRef.current = 0;
-    aiPersonaRef.current = createAiPersona();
+    aiPersonaRef.current = createAiPersona(lastAiPersonaStyleRef.current);
     setPeerTyping(false);
     setIncomingFriendRequest(null);
   }, [clearAiTimers]);
 
-  const addAiMessage = useCallback((text: string) => {
+  const isCurrentAiConversation = useCallback((conversationId?: string | null) => {
+    return Boolean(
+      aiActiveRef.current &&
+        aiConversationIdRef.current &&
+        (!conversationId || aiConversationIdRef.current === conversationId)
+    );
+  }, []);
+
+  const addAiMessage = useCallback((text: string, conversationId?: string | null) => {
+    if (!isCurrentAiConversation(conversationId)) return;
+
     const message = {
       id: crypto.randomUUID(),
       text,
@@ -187,34 +217,35 @@ export function useChat(authToken = "") {
     setMessages((prev) => [...prev, message]);
     setPeerTyping(false);
     scheduleAiIdleFollowUpRef.current?.();
-  }, []);
+  }, [isCurrentAiConversation]);
 
   const scheduleAiMessage = useCallback(
-    (text: string) => {
-      if (!aiActiveRef.current) return null;
+    (text: string, conversationId?: string | null) => {
+      if (!isCurrentAiConversation(conversationId)) return null;
 
       setPeerTyping(true);
       const timeout = setTimeout(() => {
-        if (!aiActiveRef.current) return;
-        addAiMessage(text);
+        if (!isCurrentAiConversation(conversationId)) return;
+        addAiMessage(text, conversationId);
       }, typingDelayFor(text));
       aiReplyTimeoutRef.current = timeout;
       return timeout;
     },
-    [addAiMessage]
+    [addAiMessage, isCurrentAiConversation]
   );
 
   const scheduleAiMessages = useCallback(
-    (texts: string[]) => {
+    (texts: string[], conversationId?: string | null) => {
       let delay = 0;
       texts.filter(Boolean).slice(0, 3).forEach((text) => {
         delay += randomDelay(150, 450);
         aiReplyTimeoutRef.current = setTimeout(() => {
-          scheduleAiMessage(text);
+          if (!isCurrentAiConversation(conversationId)) return;
+          scheduleAiMessage(text, conversationId);
         }, delay);
       });
     },
-    [scheduleAiMessage]
+    [isCurrentAiConversation, scheduleAiMessage]
   );
 
   const scheduleAiIdleFollowUp = useCallback(() => {
@@ -236,26 +267,31 @@ export function useChat(authToken = "") {
           text: message.text,
         }));
 
+      const conversationId = aiConversationIdRef.current;
+
       void requestAssistantMessage({
-        conversationId: aiConversationIdRef.current,
+        conversationId,
         sessionId: sessionIdRef.current,
         userGender: genderRef.current,
         assistantGender: aiAssistantGenderRef.current ?? weightedAssistantGenderFor(genderRef.current),
+        personaStyle: aiPersonaRef.current.styleId,
         message: "The user has been quiet for a short time. Send one brief, natural follow-up message.",
         idleFollowUp: true,
         history,
       })
         .then((reply) => {
+          if (!isCurrentAiConversation(conversationId)) return;
           const replyMessages = reply.messages.length > 0
             ? reply.messages
             : [fallbackAssistantReply()];
-          scheduleAiMessages(replyMessages.slice(0, 1));
+          scheduleAiMessages(replyMessages.slice(0, 1), conversationId);
         })
         .catch(() => {
-          scheduleAiMessage(fallbackAssistantReply());
+          if (!isCurrentAiConversation(conversationId)) return;
+          scheduleAiMessage(fallbackAssistantReply(), conversationId);
         });
     }, randomDelay(AI_IDLE_FOLLOW_UP_MIN_MS, AI_IDLE_FOLLOW_UP_MAX_MS));
-  }, [scheduleAiMessage, scheduleAiMessages]);
+  }, [isCurrentAiConversation, scheduleAiMessage, scheduleAiMessages]);
 
   scheduleAiIdleFollowUpRef.current = scheduleAiIdleFollowUp;
 
@@ -278,7 +314,8 @@ export function useChat(authToken = "") {
     aiAssistantGenderRef.current = weightedAssistantGenderFor(genderRef.current);
     aiMessagesRef.current = [];
     aiIdleFollowUpCountRef.current = 0;
-    aiPersonaRef.current = createAiPersona();
+    aiPersonaRef.current = createAiPersona(lastAiPersonaStyleRef.current);
+    lastAiPersonaStyleRef.current = aiPersonaRef.current.styleId;
     const aiChatId = `ai-${crypto.randomUUID()}`;
     setChatId(aiChatId);
     chatIdRef.current = aiChatId;
@@ -288,7 +325,7 @@ export function useChat(authToken = "") {
     setStatus("matched");
     statusRef.current = "matched";
     if (aiPersonaRef.current.startedChat) {
-      aiGreetingTimeoutRef.current = scheduleAiMessage("Hi");
+      aiGreetingTimeoutRef.current = scheduleAiMessage(aiPersonaRef.current.greeting, aiConversationIdRef.current);
     }
   }, [scheduleAiMessage]);
 
@@ -557,22 +594,27 @@ export function useChat(authToken = "") {
       aiMessagesRef.current = [...aiMessagesRef.current, userMessage];
       setMessages((prev) => [...prev, userMessage]);
       aiTypingTimeoutRef.current = setTimeout(() => {
+        if (!isCurrentAiConversation(conversationId)) return;
+
         void requestAssistantMessage({
           conversationId,
           sessionId: sessionIdRef.current,
           userGender: genderRef.current,
           assistantGender: aiAssistantGenderRef.current ?? weightedAssistantGenderFor(genderRef.current),
+          personaStyle: aiPersonaRef.current.styleId,
           message: text,
           history,
         })
           .then((reply) => {
+            if (!isCurrentAiConversation(conversationId)) return;
             const replyMessages = reply.messages.length > 0
               ? reply.messages
               : [fallbackAssistantReply()];
-            scheduleAiMessages(replyMessages);
+            scheduleAiMessages(replyMessages, conversationId);
           })
           .catch(() => {
-            scheduleAiMessage(fallbackAssistantReply());
+            if (!isCurrentAiConversation(conversationId)) return;
+            scheduleAiMessage(fallbackAssistantReply(), conversationId);
           });
       }, randomDelay(250, 700));
       return;
@@ -609,7 +651,7 @@ export function useChat(authToken = "") {
       ...prev,
       { id: crypto.randomUUID(), text, isMine: true, timestamp: Date.now() },
     ]);
-  }, [messages, scheduleAiMessage, scheduleAiMessages]);
+  }, [isCurrentAiConversation, messages, scheduleAiMessage, scheduleAiMessages]);
 
   const sendTyping = useCallback(() => {
     if (!channelRef.current) return;

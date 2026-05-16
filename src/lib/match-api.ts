@@ -60,6 +60,7 @@ export interface AssistantReplyRequest {
   sessionId: string;
   userGender: UserGender;
   assistantGender: UserGender;
+  personaStyle?: string;
   message: string;
   idleFollowUp?: boolean;
   history: Array<{
