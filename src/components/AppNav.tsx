@@ -1,4 +1,4 @@
-import { useState, type MouseEvent } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 import { Moon, Sun } from "lucide-react";
 import type { AppUser } from "../lib/match-api";
 
@@ -28,6 +28,21 @@ export default function AppNav({
   const [authMode, setAuthMode] = useState<"login" | "signup" | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
+  const [activityCount, setActivityCount] = useState(() => randomActivityCount());
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setActivityCount((current) => {
+        const direction = Math.random() > 0.47 ? 1 : -1;
+        const step = 45 + Math.floor(Math.random() * 155);
+        return clampActivityCount(current + direction * step);
+      });
+    }, 3200 + Math.floor(Math.random() * 1800));
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, []);
 
   function handleNavClick(event: MouseEvent<HTMLAnchorElement>, page: string) {
     event.preventDefault();
@@ -59,6 +74,16 @@ export default function AppNav({
             >
               Start Chat
             </a>
+            <div
+              className="flex min-h-[40px] items-center gap-2 rounded-lg border border-emerald-400/20 bg-emerald-400/10 px-3 text-xs font-semibold text-emerald-100"
+              title="Displayed activity pulse"
+            >
+              <span className="relative flex h-2.5 w-2.5">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-300 opacity-75" />
+                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-400" />
+              </span>
+              <span>{activityCount.toLocaleString()} active users</span>
+            </div>
             <button
               type="button"
               onClick={() => onThemeChange(theme === "light" ? "dark" : "light")}
@@ -132,6 +157,14 @@ export default function AppNav({
       )}
     </>
   );
+}
+
+function randomActivityCount() {
+  return 5000 + Math.floor(Math.random() * 5001);
+}
+
+function clampActivityCount(value: number) {
+  return Math.max(5000, Math.min(10000, value));
 }
 
 function profileLabel(username: string) {
