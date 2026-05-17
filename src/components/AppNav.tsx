@@ -1,8 +1,11 @@
 import { useEffect, useState, type MouseEvent } from "react";
 import { Moon, Sun } from "lucide-react";
-import type { AppUser } from "../lib/match-api";
+import { getActivityCount, type AppUser } from "../lib/match-api";
 
 type AppTheme = "light" | "dark";
+
+const FAKE_ACTIVITY_MIN = 5000;
+const FAKE_ACTIVITY_MAX = 10000;
 
 interface AppNavProps {
   theme: AppTheme;
@@ -28,18 +31,34 @@ export default function AppNav({
   const [authMode, setAuthMode] = useState<"login" | "signup" | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
-  const [activityCount, setActivityCount] = useState(() => randomActivityCount());
+  const [activityCount, setActivityCount] = useState(() => initialStoredActivityCount());
 
   useEffect(() => {
+    let cancelled = false;
+
+    async function loadActivityCount() {
+      try {
+        const nextCount = await getActivityCount();
+        if (cancelled) return;
+        setActivityCount(clampActivityCount(nextCount));
+        localStorage.setItem("activity_count", String(clampActivityCount(nextCount)));
+      } catch {
+        if (cancelled) return;
+        setActivityCount((current) => {
+          const nextCount = nextFallbackActivityCount(current);
+          localStorage.setItem("activity_count", String(nextCount));
+          return nextCount;
+        });
+      }
+    }
+
+    void loadActivityCount();
     const intervalId = window.setInterval(() => {
-      setActivityCount((current) => {
-        const direction = Math.random() > 0.47 ? 1 : -1;
-        const step = 45 + Math.floor(Math.random() * 155);
-        return clampActivityCount(current + direction * step);
-      });
-    }, 3200 + Math.floor(Math.random() * 1800));
+      void loadActivityCount();
+    }, 15000);
 
     return () => {
+      cancelled = true;
       window.clearInterval(intervalId);
     };
   }, []);
@@ -159,12 +178,20 @@ export default function AppNav({
   );
 }
 
-function randomActivityCount() {
-  return 5000 + Math.floor(Math.random() * 5001);
+function initialStoredActivityCount() {
+  const storedCount = Number(localStorage.getItem("activity_count"));
+  if (Number.isFinite(storedCount) && storedCount > 0) return clampActivityCount(storedCount);
+  return FAKE_ACTIVITY_MIN + Math.floor(Math.random() * (FAKE_ACTIVITY_MAX - FAKE_ACTIVITY_MIN + 1));
 }
 
 function clampActivityCount(value: number) {
-  return Math.max(5000, Math.min(10000, value));
+  return Math.max(FAKE_ACTIVITY_MIN, Math.min(FAKE_ACTIVITY_MAX, value));
+}
+
+function nextFallbackActivityCount(current: number) {
+  const direction = Math.random() > 0.49 ? 1 : -1;
+  const step = 8 + Math.floor(Math.random() * 34);
+  return clampActivityCount(current + direction * step);
 }
 
 function profileLabel(username: string) {

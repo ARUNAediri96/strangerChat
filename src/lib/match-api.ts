@@ -77,6 +77,10 @@ export interface IceServersResponse {
   iceServers: RTCIceServer[];
 }
 
+export interface ActivityResponse {
+  activeCount: number;
+}
+
 type BroadcastHandler = (event: { payload: Record<string, unknown> }) => void;
 
 async function apiCall<T>(path: string, body: object, token?: string | null): Promise<T> {
@@ -144,6 +148,11 @@ export async function requestAssistantMessage(
 export async function getIceServers(): Promise<RTCIceServer[]> {
   const data = await apiGet<IceServersResponse>("/api/video/ice-servers");
   return data.iceServers;
+}
+
+export async function getActivityCount(): Promise<number> {
+  const data = await apiGet<ActivityResponse>("/api/activity");
+  return data.activeCount;
 }
 
 export async function registerAccount(email: string, username: string, password: string) {

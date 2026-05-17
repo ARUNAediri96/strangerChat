@@ -36,6 +36,9 @@ const emailFrom = process.env.EMAIL_FROM || "support@chatstranger.online";
 const ASSISTANT_REPLY_DELAY_MIN_MS = 2000;
 const ASSISTANT_REPLY_DELAY_MAX_MS = 3000;
 const ASSISTANT_PROVIDER_COOLDOWN_MS = 5 * 60 * 1000;
+const FAKE_ACTIVITY_MIN = 5000;
+const FAKE_ACTIVITY_MAX = 10000;
+const FAKE_ACTIVITY_UPDATE_MS = 15000;
 let groqDisabledUntil = 0;
 let openAiDisabledUntil = 0;
 let hfDisabledUntil = 0;
@@ -225,6 +228,91 @@ async function ensureAuthSchema() {
       ON app_users(verification_token)
       WHERE verification_token IS NOT NULL
   `);
+}
+
+async function ensureActivitySchema() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS site_activity (
+      name text PRIMARY KEY,
+      active_count integer NOT NULL,
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+}
+
+function clampActivityCount(value) {
+  return Math.max(FAKE_ACTIVITY_MIN, Math.min(FAKE_ACTIVITY_MAX, value));
+}
+
+function initialActivityCount() {
+  return FAKE_ACTIVITY_MIN + Math.floor(Math.random() * (FAKE_ACTIVITY_MAX - FAKE_ACTIVITY_MIN + 1));
+}
+
+function nextActivityCount(current, intervals) {
+  let next = current;
+  const steps = Math.min(20, Math.max(1, intervals));
+
+  for (let index = 0; index < steps; index += 1) {
+    const direction = Math.random() > 0.49 ? 1 : -1;
+    const step = 8 + Math.floor(Math.random() * 34);
+    next = clampActivityCount(next + direction * step);
+  }
+
+  return next;
+}
+
+async function activityCount() {
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    let { rows } = await client.query(
+      "SELECT active_count, updated_at FROM site_activity WHERE name = $1 FOR UPDATE",
+      ["global"]
+    );
+
+    if (rows.length === 0) {
+      const { rows: insertedRows } = await client.query(
+        `INSERT INTO site_activity (name, active_count)
+         VALUES ($1, $2)
+         ON CONFLICT (name) DO NOTHING
+         RETURNING active_count, updated_at`,
+        ["global", initialActivityCount()]
+      );
+      rows = insertedRows;
+
+      if (rows.length === 0) {
+        const { rows: existingRows } = await client.query(
+          "SELECT active_count, updated_at FROM site_activity WHERE name = $1 FOR UPDATE",
+          ["global"]
+        );
+        rows = existingRows;
+      }
+    }
+
+    const row = rows[0];
+    let count = clampActivityCount(Number(row?.active_count || initialActivityCount()));
+    const updatedAt = row?.updated_at ? new Date(row.updated_at).getTime() : Date.now();
+    const elapsedMs = Math.max(0, Date.now() - updatedAt);
+    const intervals = Math.floor(elapsedMs / FAKE_ACTIVITY_UPDATE_MS);
+
+    if (intervals > 0) {
+      count = nextActivityCount(count, intervals);
+      await client.query(
+        "UPDATE site_activity SET active_count = $2, updated_at = NOW() WHERE name = $1",
+        ["global", count]
+      );
+    }
+
+    await client.query("COMMIT");
+    return { status: 200, body: { activeCount: count } };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 function normalizeIceServer(server) {
@@ -1735,6 +1823,12 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/activity") {
+      const result = await activityCount();
+      jsonResponse(req, res, result.status, result.body);
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/video/ice-servers") {
       const result = await iceServersResponse();
       jsonResponse(req, res, result.status, result.body);
@@ -1767,13 +1861,13 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-ensureAuthSchema()
+Promise.all([ensureAuthSchema(), ensureActivitySchema()])
   .then(() => {
     server.listen(port, () => {
       console.log(`Supabase chat API listening on http://localhost:${port}`);
     });
   })
   .catch((error) => {
-    console.error("Could not prepare auth schema:", error);
+    console.error("Could not prepare API schema:", error);
     process.exit(1);
   });
