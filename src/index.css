@@ -122,11 +122,16 @@
   html[data-theme="light"] .text-cyan-100,
   html[data-theme="light"] .text-cyan-200,
   html[data-theme="light"] .text-cyan-300,
+  html[data-theme="light"] .text-cyan-50,
   html[data-theme="light"] .text-sky-300 {
     color: #0369a1 !important;
   }
 
-  html[data-theme="light"] .text-amber-200 {
+  html[data-theme="light"] .text-amber-200,
+  html[data-theme="light"] .text-yellow-100,
+  html[data-theme="light"] .text-yellow-200,
+  html[data-theme="light"] .text-yellow-300,
+  html[data-theme="light"] .text-yellow-400 {
     color: #b45309 !important;
   }
 
