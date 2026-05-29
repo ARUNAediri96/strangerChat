@@ -20,7 +20,7 @@ type AppTheme = "light" | "dark";
 
 function initialTheme(): AppTheme {
   const savedTheme = localStorage.getItem("app_theme");
-  return savedTheme === "dark" ? "dark" : "light";
+  return savedTheme === "light" ? "light" : "dark";
 }
 
 function pageFromHash() {

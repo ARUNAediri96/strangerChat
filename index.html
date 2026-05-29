@@ -54,7 +54,49 @@
         "name": "StrangerChat",
         "alternateName": "Omegle Alternative Chat",
         "url": "https://chatstranger.online/",
-        "description": "Free anonymous chat with strangers, random video chat, interest matching, and public or private online chat rooms."
+        "description": "Free anonymous chat with strangers, random video chat, interest matching, and public or private online chat rooms.",
+        "potentialAction": {
+          "@type": "SearchAction",
+          "target": "https://chatstranger.online/blog?search={search_term_string}",
+          "query-input": "required name=search_term_string"
+        }
+      }
+    </script>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "SiteNavigationElement",
+            "name": "Online Chat Rooms",
+            "description": "Create public rooms or private token rooms for online group chat.",
+            "url": "https://chatstranger.online/rooms"
+          },
+          {
+            "@type": "SiteNavigationElement",
+            "name": "Friends Chat",
+            "description": "Use verified accounts for friend requests and known-friend conversations.",
+            "url": "https://chatstranger.online/friends"
+          },
+          {
+            "@type": "SiteNavigationElement",
+            "name": "Anonymous Chat Guides",
+            "description": "Read safety tips and guides for random chat, video chat, and chat rooms.",
+            "url": "https://chatstranger.online/blog"
+          },
+          {
+            "@type": "SiteNavigationElement",
+            "name": "About StrangerChat",
+            "description": "Learn about StrangerChat anonymous random chat and safety features.",
+            "url": "https://chatstranger.online/about"
+          },
+          {
+            "@type": "SiteNavigationElement",
+            "name": "Support Center",
+            "description": "Get help with accounts, verification, rooms, reports, terms, and privacy.",
+            "url": "https://chatstranger.online/support"
+          }
+        ]
       }
     </script>
     <script type="application/ld+json">
@@ -118,6 +160,8 @@
             <a href="#safety">Safety</a>
             <a href="#features">Features</a>
             <a href="#rooms">Chat rooms</a>
+            <a href="/rooms">Online Chat Rooms</a>
+            <a href="/friends">Friends Chat</a>
             <a href="/blog">Blog</a>
             <a href="/about">About</a>
             <a href="/support">Support</a>
@@ -170,6 +214,30 @@
             Users enter a username before joining so room conversations feel clear while still supporting
             anonymous chat.
           </p>
+        </section>
+
+        <section id="site-links" aria-labelledby="site-links-title">
+          <h2 id="site-links-title">Popular StrangerChat Pages</h2>
+          <article>
+            <h3><a href="/rooms">Online Chat Rooms</a></h3>
+            <p>Create public rooms, private token rooms, and group conversations for online chat.</p>
+          </article>
+          <article>
+            <h3><a href="/support">Support Center</a></h3>
+            <p>Get help with account verification, private room access, reports, terms, and privacy.</p>
+          </article>
+          <article>
+            <h3><a href="/blog">Anonymous Chat Guides</a></h3>
+            <p>Learn safer random chat habits, video chat tips, community rules, and room best practices.</p>
+          </article>
+          <article>
+            <h3><a href="/about">About StrangerChat</a></h3>
+            <p>Understand StrangerChat features for anonymous chat, rooms, friends, and safety controls.</p>
+          </article>
+          <article>
+            <h3><a href="/friends">Friends Chat</a></h3>
+            <p>Use verified accounts to continue conversations with people you choose to add.</p>
+          </article>
         </section>
 
         <section id="faq" aria-labelledby="faq-title">
